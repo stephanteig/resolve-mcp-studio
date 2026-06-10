@@ -33,3 +33,6 @@ transcriptions.json
 
 # Blackmagic API reference (not ours to distribute)
 README.txt
+
+# User's exported Resolve project templates (potentially large, personal)
+templates/drp/*.drp
