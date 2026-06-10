@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resolve MCP Studio</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <!-- Status — always visible -->
+  <header id="status" class="status-bar">
+    <span class="status-dot" id="status-dot" title="MCP-bro"></span>
+    <div class="status-text">
+      <div class="status-row"><span class="label">Prosjekt</span><span class="value mono" id="status-project">–</span></div>
+      <div class="status-row"><span class="label">Timeline</span><span class="value mono" id="status-timeline">–</span></div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Marker editor -->
+    <section class="panel-section" id="marker-editor">
+      <h2>Markers</h2>
+
+      <details class="paste-area">
+        <summary>Lim inn tekstliste</summary>
+        <textarea id="marker-paste" rows="5" class="mono"
+          placeholder="02:15 fjern pause&#10;05:30 klipp her&#10;01:02:15:12 pling inn"></textarea>
+        <div class="row">
+          <button id="marker-parse-btn" class="btn">Parse</button>
+          <span class="hint" id="marker-parse-info"></span>
+        </div>
+      </details>
+
+      <table class="marker-table">
+        <thead>
+          <tr><th>Tidskode</th><th>Navn</th><th>Farge</th><th></th></tr>
+        </thead>
+        <tbody id="marker-rows"></tbody>
+      </table>
+
+      <div class="row">
+        <button id="marker-add-btn" class="btn">+ Legg til rad</button>
+        <button id="marker-send-btn" class="btn btn-primary">Send til Resolve</button>
+      </div>
+      <div class="report" id="marker-report"></div>
+    </section>
+
+    <!-- Transcription -->
+    <section class="panel-section" id="transcription">
+      <h2>Transkripsjon</h2>
+
+      <div class="field">
+        <label for="tr-language">Språk</label>
+        <select id="tr-language">
+          <option value="auto">Auto</option>
+          <option value="no" selected>Norsk</option>
+          <option value="en">Engelsk</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label class="radio"><input type="radio" name="tr-mode" value="new" checked> Ny subtitle track</label>
+        <label class="radio"><input type="radio" name="tr-mode" value="correct"> Korriger eksisterende</label>
+      </div>
+
+      <div class="field hidden" id="tr-track-field">
+        <label for="tr-track">Track</label>
+        <select id="tr-track"></select>
+      </div>
+
+      <div class="row">
+        <button id="tr-start-btn" class="btn btn-primary">Start transkripsjon</button>
+        <span class="hint" id="tr-status"></span>
+      </div>
+
+      <div class="hidden" id="tr-result">
+        <div class="segments mono" id="tr-segments"></div>
+        <div class="field" id="tr-trackname-field">
+          <label for="tr-trackname">Track-navn</label>
+          <input type="text" id="tr-trackname" class="mono" placeholder="Norsk STT">
+        </div>
+        <div class="row">
+          <button id="tr-write-btn" class="btn btn-primary">Skriv til Resolve</button>
+        </div>
+        <div class="report" id="tr-report"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="panel.js"></script>
+  <script src="components/status.js"></script>
+  <script src="components/marker-editor.js"></script>
+  <script src="components/transcription.js"></script>
+</body>
+</html>
