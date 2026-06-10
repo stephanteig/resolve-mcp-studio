@@ -21,6 +21,7 @@ transcription = [
 
 [project.scripts]
 resolve-claude-mcp = "resolve_claude_mcp.server:main"
+resolve-claude-panel = "resolve_claude_mcp.panel_server:main"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
