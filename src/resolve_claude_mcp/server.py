@@ -36,6 +36,10 @@ from .templates import (
     list_templates as _list_templates,
     create_project_from_template as _create_project_from_template,
 )
+from .media_pool import (
+    read_finder_structure as _read_finder_structure,
+    sync_structure_to_media_pool as _sync_structure_to_media_pool,
+)
 from .resolve_utils import (
     folder_to_dict,
     clip_to_dict,
@@ -1341,6 +1345,47 @@ def create_project_from_template(template_name: str, project_name: str) -> str:
         pm = conn.get_project_manager()
         report = _create_project_from_template(pm, template_name, project_name)
         return json.dumps(report, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  MEDIA POOL ↔ FINDER SYNC
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def sync_finder_folder_to_media_pool(folder_path: str) -> str:
+    """
+    Mirror a Finder folder structure as bins in the Media Pool and import
+    each folder's media files into its bin.
+
+    A bin named after the folder is created in the Media Pool root, with
+    sub-bins matching the subfolder tree. Media files directly inside each
+    folder are imported into the matching bin. The sync is idempotent:
+    existing bins are reused by name and files already present in a bin
+    (matched on file path) are skipped — re-run it to pick up new files.
+
+    Note: Resolve's scripting API has no live-linked bins, so this is a
+    one-time import per run, not a persistent link.
+
+    Parameters:
+    - folder_path: absolute path to the folder to sync
+
+    Returns a JSON report: project name, totals (bins created/reused,
+    files imported/skipped/failed) and the created bin structure.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        media_pool = conn.get_media_pool()
+
+        structure = _read_finder_structure(folder_path)
+        report = _sync_structure_to_media_pool(media_pool, structure)
+        return json.dumps({
+            "project": project.GetName(),
+            "synced_path": structure["path"],
+            **report,
+        }, indent=2, ensure_ascii=False)
     except Exception as e:
         return f"Error: {e}"
 
