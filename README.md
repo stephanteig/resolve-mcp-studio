@@ -2,6 +2,8 @@
 
 Connect **DaVinci Resolve Studio** to **Claude AI** through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), enabling AI-assisted video editing, color grading, Fusion compositing, and more — all through natural language.
 
+> This repo (`stephanteig/resolve-mcp-studio`) is a fork of [barckley75/resolve-claude-mcp](https://github.com/barckley75/resolve-claude-mcp) extended with **studio workflow tools**: a marker parser/editor, timeline transcription with subtitle track management, project templates, Media Pool ↔ Finder sync, and an optional browser panel. See [Studio Extensions](#studio-extensions-this-fork).
+
 > **Note:** This is a third-party integration and is not created by or affiliated with Blackmagic Design.
 >
 > ⚠️ **Use at your own risk.** This project is intended for testing and experimentation. **Do not use in production.** AI-assisted tools can modify or delete your project data — always work on backups.
@@ -56,6 +58,13 @@ Connect **DaVinci Resolve Studio** to **Claude AI** through the [Model Context P
 - Saves SRT file next to source for Resolve subtitle import
 - Multiple model sizes: tiny (fastest) to large (most accurate), default: turbo
 - **Windows/Linux users:** these tools are unavailable (MLX is Apple-only). The other 48 tools work fine.
+
+### Studio Extensions (this fork)
+- **Marker parser & editor** — paste a free-text list of timecodes ("02:15 fjern pause") and get color-coded markers on the timeline, with a preview/confirm step
+- **Timeline transcription** — render the timeline's audio and transcribe it locally with mlx-whisper; write the result as a new subtitle track, or *correct* an existing track's text without touching its timing
+- **Project templates** — create projects with a predefined structure (resolution, fps, bins, 16:9/9:16 timelines) from JSON configs, or by importing your own `.drp`
+- **Media Pool ↔ Finder sync** — mirror a folder tree from disk as bins and import each folder's media; idempotent, so re-running picks up new files without duplicates
+- **Browser panel** — a compact dark-themed panel (status, marker editor, transcription) served by a local HTTP bridge
 
 ### Screenshot (macOS only)
 - `screenshot` — captures the Resolve window so Claude can visually inspect what's on screen
@@ -275,10 +284,27 @@ Make sure DaVinci Resolve Studio is running with a project open, then talk to Cl
 > "Add a render job and start rendering"  
 > "What's the render progress?"
 
+### Markers (fork)
+> "Her er notatene mine fra gjennomsyn: 02:15 fjern pause, 05:30 klipp her, 12:00 lyd for lav — lag markers"  
+> "Vis meg hva som blir satt før du gjør det" *(parse_and_preview_markers → bekreft → set_markers_from_list)*
+
+### Timeline Transcription & Subtitles (fork)
+> "Transkriber timelinen på norsk og legg den som ny subtitle track"  
+> "Subtitle track 1 har riktig timing men feil tekst — transkriber på nytt og korriger teksten uten å endre timingen"  
+> "Hvilke subtitle tracks finnes på timelinen?"
+
+### Project Templates (fork)
+> "Hvilke prosjektmaler har jeg?"  
+> "Opprett et nytt prosjekt fra standardmalen som heter 'Kundefilm høst 2026'"
+
+### Media Pool Sync (fork)
+> "Synk mappen ~/Footage/PROSJEKT_X inn i Media Pool med samme bin-struktur"  
+> "Det har kommet nye filer i footage-mappen — synk på nytt" *(kun nye filer importeres)*
+
 ### Power Tool
 > "Run this code: print(project.GetSetting('timelineFrameRate'))"
 
-## Available Tools (52)
+## Available Tools (61)
 
 | Category | Tools |
 |---|---|
@@ -296,6 +322,76 @@ Make sure DaVinci Resolve Studio is running with a project open, then talk to Cl
 | **Local Transcription** _(macOS only)_ | `transcribe_audio`, `transcribe_and_add_subtitles`, `export_srt`, `list_whisper_models` |
 | **Screenshot** _(macOS only)_ | `screenshot` |
 | **Code Execution** | `execute_resolve_code` |
+| **Markers** _(fork)_ | `parse_and_preview_markers`, `set_markers_from_list` |
+| **Subtitle Tracks** _(fork, macOS only)_ | `get_timeline_subtitle_tracks`, `transcribe_timeline_audio`, `write_subtitles_to_resolve` |
+| **Project Templates** _(fork)_ | `list_project_templates`, `create_project_from_template` |
+| **Media Pool Sync** _(fork)_ | `sync_finder_folder_to_media_pool` |
+
+## Studio Extensions (this fork)
+
+### Marker parser & editor
+
+| Tool | Description |
+|---|---|
+| `parse_and_preview_markers` | Parses a free-text list of timecodes + descriptions into structured markers — **nothing is written yet**. Formats: `MM:SS text`, `HH:MM:SS text`, `HH:MM:SS:FF text` (three components are always HH:MM:SS; frame-accurate positions need the explicit four-component form). fps is read from the active timeline unless passed. Returns the markers, any unparseable lines, and the active project/timeline name for confirmation. |
+| `set_markers_from_list` | Writes an approved marker list to the current timeline. Each marker: `frame` (required), `name`, `color`, `note`, `duration`. Returns a report: project/timeline, how many were set, and per-row failures. |
+
+Colors are auto-assigned from keywords in the description: *feil/fjern/problem* → Red, *klipp/cut/edit* → Orange, *lyd/musikk/audio* → Yellow, *pling/jingle/stikk* → Cyan, *intro/outro* → Green, otherwise Blue.
+
+### Timeline transcription & subtitle tracks (macOS / Apple Silicon)
+
+| Tool | Description |
+|---|---|
+| `get_timeline_subtitle_tracks` | Lists subtitle tracks on the current timeline: index (1-based), name, item count, enabled state. |
+| `transcribe_timeline_audio` | Renders the timeline's audio to a temporary WAV via the render queue (the temporary job is cleaned up; current render settings are changed) and transcribes it locally with mlx-whisper. `language`: `auto`/`norsk`/`engelsk` or any ISO 639-1 code. `output_mode`: `new` returns segments for a new track; `correct` maps the transcription onto the timing of an existing track (`track_index` required) and returns proposed text alongside `original_text` for review. Nothing is written to the timeline. |
+| `write_subtitles_to_resolve` | Writes reviewed segments. `new`: adds a subtitle track (SRT → media pool import). `correct`: replaces **only the text** of the track at `track_index` — timing always comes from the existing items. Because the Resolve API cannot edit subtitle text in place, the corrected version is written as a new track `"<name> (corrected)"` and the original track is **disabled, never deleted**. |
+
+### Project templates
+
+| Tool | Description |
+|---|---|
+| `list_project_templates` | Lists template configs from `templates/configs/` (id, name, resolution, fps, timelines, bins, whether a `.drp` is attached). |
+| `create_project_from_template` | Creates and opens a new project. If the config references a `.drp` in `templates/drp/` (optional `"drp"` key), it is imported and renamed. Otherwise the project is built from the config: resolution + fps, bins, timelines — 9:16 timelines get a custom rotated resolution. Anything that can't be applied lands in `warnings` instead of failing. |
+
+Template configs live in `templates/configs/*.json`:
+
+```json
+{
+  "name": "Standard (3 timelines)",
+  "resolution": "3840x2160",
+  "fps": 25,
+  "audio_channels": 2,
+  "timelines": [
+    {"name": "EDIT-16x9", "type": "16:9"},
+    {"name": "EDIT-9x16", "type": "9:16"},
+    {"name": "Selects", "type": "16:9"}
+  ],
+  "bins": ["000_TIMELINE"]
+}
+```
+
+Copy your own exported project to `templates/drp/_TEMPLATE_.drp` and add `"drp": "_TEMPLATE_.drp"` to the config to create projects from it instead. The templates directory can be relocated with `RESOLVE_MCP_TEMPLATES_DIR`.
+
+### Media Pool ↔ Finder sync
+
+| Tool | Description |
+|---|---|
+| `sync_finder_folder_to_media_pool` | Mirrors a folder tree as Media Pool bins and imports each folder's media files into its bin. Hidden files are skipped; media is detected by extension (video/audio/stills incl. BRAW/R3D/EXR/DPX). **Idempotent:** existing bins are reused by name and files already in a bin are skipped — re-run it to pick up new files. Note: Resolve's API has no live-linked bins, so this is an import per run, not a persistent link. |
+
+### Browser panel
+
+A compact panel (status + marker editor + transcription) that runs in any browser. Since the MCP server speaks stdio with Claude Desktop, the panel talks to a separate **localhost-only HTTP bridge**:
+
+```bash
+uv run python -m resolve_claude_mcp.panel_server
+# → open http://127.0.0.1:8765  (port: RESOLVE_MCP_PANEL_PORT)
+```
+
+- **Status** — connection state, active project and timeline
+- **Marker editor** — editable table (timecode | name | color | delete), color picker with Resolve's 17 marker colors, paste-and-parse from free text, "Send til Resolve"
+- **Transcription** — language (Norsk/Engelsk/Auto), new track or correct existing, live job progress, segment review, "Skriv til Resolve"
+
+The bridge binds to 127.0.0.1 only and allows cross-origin requests solely from localhost/file origins.
 
 ## Troubleshooting
 
@@ -340,6 +436,12 @@ If this is production work on a client project, don't let the AI drive unsupervi
 ## License
 
 MIT — see [LICENSE](LICENSE). The MIT license specifically disclaims all warranties and liability; the Disclaimer section above restates that in plain English.
+
+## Credits
+
+- Fork of [barckley75/resolve-claude-mcp](https://github.com/barckley75/resolve-claude-mcp)
+- Inspired by [coreymaypray/sloth-skill-tree](https://github.com/coreymaypray/sloth-skill-tree) (davinci-resolve-mcp skill)
+- Subtitle reference: [Auto-Subs by Tom Moroney](https://tom-moroney.com/auto-subs/)
 
 ## Acknowledgments
 
