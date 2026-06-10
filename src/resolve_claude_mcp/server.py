@@ -21,6 +21,11 @@ from .transcription import (
     WHISPER_MODELS,
     DEFAULT_MODEL,
 )
+from .markers import (
+    parse_marker_list,
+    VALID_MARKER_COLORS,
+    DEFAULT_COLOR as DEFAULT_MARKER_COLOR,
+)
 from .resolve_utils import (
     folder_to_dict,
     clip_to_dict,
@@ -370,6 +375,115 @@ def get_markers() -> str:
         if not markers:
             return "No markers on timeline"
         return json.dumps({str(k): v for k, v in markers.items()}, indent=2, default=str)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def parse_and_preview_markers(text: str, fps: Optional[float] = None) -> str:
+    """
+    Parse a free-text list of timecodes + descriptions into structured
+    markers, ready for review BEFORE they are written to the timeline.
+
+    Supported line formats (description follows the timecode):
+    - "MM:SS text"        e.g. "02:15 fjern pause"
+    - "HH:MM:SS text"     e.g. "01:02:15 klipp her"
+    - "HH:MM:SS:FF text"  e.g. "01:02:15:12 pling inn"
+
+    Three components are always interpreted as HH:MM:SS; frame-accurate
+    positions require the explicit four-component form. Colors are
+    auto-assigned from keywords in the description (e.g. "fjern" → Red,
+    "klipp" → Orange, "lyd" → Yellow, "pling"/"jingle" → Cyan,
+    "intro"/"outro" → Green, otherwise Blue).
+
+    Parameters:
+    - text: Raw text, one marker per line
+    - fps: Frame rate for timecode conversion. If omitted, read from the
+      current timeline.
+
+    Returns JSON with the parsed markers, any skipped (unparseable) lines,
+    and the active project + timeline name so the user can confirm the
+    target before calling set_markers_from_list.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        timeline = _require_timeline(conn)
+
+        if fps is None:
+            fps_setting = timeline.GetSetting("timelineFrameRate")
+            if not fps_setting:
+                return "Error: could not read frame rate from timeline — pass fps explicitly"
+            fps = float(fps_setting)
+
+        markers, skipped = parse_marker_list(text, fps)
+        return json.dumps({
+            "project": project.GetName(),
+            "timeline": timeline.GetName(),
+            "fps": fps,
+            "marker_count": len(markers),
+            "markers": markers,
+            "skipped_lines": skipped,
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def set_markers_from_list(markers: List[Dict[str, Any]]) -> str:
+    """
+    Write an approved list of markers to the current timeline.
+
+    Intended to be called with the (possibly user-edited) marker list from
+    parse_and_preview_markers. Each marker dict:
+    - frame (int, required): frame position relative to timeline start
+    - name (str, required): marker name
+    - color (str, optional): a valid Resolve marker color, default "Blue"
+    - note (str, optional): marker note
+    - duration (int, optional): duration in frames, default 1
+
+    Returns a JSON report with the project and timeline name (so the user
+    can confirm where the markers landed), how many were set, and any
+    failures with the reason.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        timeline = _require_timeline(conn)
+
+        set_count = 0
+        failures = []
+        for i, marker in enumerate(markers):
+            frame = marker.get("frame")
+            name = marker.get("name", "")
+            if not isinstance(frame, int) or frame < 0:
+                failures.append({"index": i, "marker": name, "reason": f"invalid frame: {frame!r}"})
+                continue
+
+            color = marker.get("color") or DEFAULT_MARKER_COLOR
+            if color not in VALID_MARKER_COLORS:
+                failures.append({"index": i, "marker": name, "reason": f"invalid color: {color!r}"})
+                continue
+
+            note = marker.get("note", "")
+            duration = marker.get("duration", 1)
+            success = timeline.AddMarker(frame, color, name, note, duration, "")
+            if success:
+                set_count += 1
+            else:
+                failures.append({
+                    "index": i, "marker": name,
+                    "reason": f"AddMarker failed at frame {frame} "
+                              "(marker may already exist at this frame)",
+                })
+
+        return json.dumps({
+            "project": project.GetName(),
+            "timeline": timeline.GetName(),
+            "requested": len(markers),
+            "set": set_count,
+            "failures": failures,
+        }, indent=2, ensure_ascii=False)
     except Exception as e:
         return f"Error: {e}"
 
