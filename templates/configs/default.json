@@ -1,0 +1,12 @@
+{
+  "name": "Standard (3 timelines)",
+  "resolution": "3840x2160",
+  "fps": 25,
+  "audio_channels": 2,
+  "timelines": [
+    {"name": "EDIT-16x9", "type": "16:9"},
+    {"name": "EDIT-9x16", "type": "9:16"},
+    {"name": "Selects", "type": "16:9"}
+  ],
+  "bins": ["000_TIMELINE"]
+}

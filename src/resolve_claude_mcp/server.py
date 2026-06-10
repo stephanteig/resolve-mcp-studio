@@ -32,6 +32,10 @@ from .markers import (
     VALID_MARKER_COLORS,
     DEFAULT_COLOR as DEFAULT_MARKER_COLOR,
 )
+from .templates import (
+    list_templates as _list_templates,
+    create_project_from_template as _create_project_from_template,
+)
 from .resolve_utils import (
     folder_to_dict,
     clip_to_dict,
@@ -1289,6 +1293,54 @@ def write_subtitles_to_resolve(
             "output_mode": output_mode,
             **result,
         }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  PROJECT TEMPLATES
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def list_project_templates() -> str:
+    """
+    List the available project templates from templates/configs/.
+
+    Each entry has an id (use as template_name for
+    create_project_from_template), display name, resolution/fps,
+    timeline and bin names, and whether a .drp file is attached.
+    """
+    try:
+        return json.dumps({
+            "templates": _list_templates(),
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def create_project_from_template(template_name: str, project_name: str) -> str:
+    """
+    Create a new Resolve project from a template.
+
+    If the template references a .drp file (templates/drp/), the project
+    is imported from it and renamed. Otherwise it is built from the
+    config: resolution + frame rate, bins, and timelines — 9:16 timelines
+    get a custom rotated resolution. The new project is opened and its
+    first timeline made current.
+
+    Parameters:
+    - template_name: template id or display name (see list_project_templates)
+    - project_name: name for the new project (must not already exist)
+
+    Returns a JSON report: what was created, plus warnings for anything
+    that could not be applied.
+    """
+    try:
+        conn = _conn()
+        pm = conn.get_project_manager()
+        report = _create_project_from_template(pm, template_name, project_name)
+        return json.dumps(report, indent=2, ensure_ascii=False)
     except Exception as e:
         return f"Error: {e}"
 
