@@ -207,3 +207,280 @@ def _seconds_to_srt_time(seconds: float) -> str:
     s = int(seconds % 60)
     ms = int((seconds % 1) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+# ── Spec-level wrapper ──────────────────────────────────────────────
+
+def transcribe_audio(
+    audio_path: str,
+    language: Optional[str] = None,
+    model: str = DEFAULT_MODEL,
+    word_timestamps: bool = False,
+) -> Dict[str, Any]:
+    """Transcribe an audio file and return normalized segments.
+
+    Thin wrapper around transcribe() that guarantees a uniform shape:
+    {"language": str, "text": str, "segments": [{"start", "end", "text", "words"?}]}
+    """
+    result = transcribe(
+        audio_path,
+        model=model,
+        language=language,
+        word_timestamps=word_timestamps,
+    )
+    segments = []
+    for seg in result.get("segments", []):
+        norm = {
+            "start": float(seg["start"]),
+            "end": float(seg["end"]),
+            "text": seg["text"].strip(),
+        }
+        if word_timestamps and seg.get("words"):
+            norm["words"] = [
+                {"start": float(w["start"]), "end": float(w["end"]), "text": w["word"]}
+                for w in seg["words"]
+            ]
+        segments.append(norm)
+    return {
+        "language": result.get("language", "unknown"),
+        "text": result.get("text", "").strip(),
+        "segments": segments,
+    }
+
+
+# ── Resolve subtitle track helpers ──────────────────────────────────
+#
+# The Resolve scripting API has no call that creates subtitle items
+# directly, and no setter for the text of an existing subtitle item.
+# The established workaround (same approach as Auto-Subs) is:
+#   write an SRT file → MediaPool.ImportMedia() → MediaPool.AppendToTimeline()
+# which places the subtitles on a subtitle track in the current timeline.
+# Correction therefore writes a NEW track with the original timing and
+# corrected text, and disables (never deletes) the original track.
+
+def _timeline_fps(timeline) -> float:
+    """Read the frame rate from a timeline, raising if unavailable."""
+    fps_setting = timeline.GetSetting("timelineFrameRate")
+    if not fps_setting:
+        raise RuntimeError("Could not read frame rate from timeline")
+    return float(fps_setting)
+
+
+def get_subtitle_tracks(timeline) -> List[Dict[str, Any]]:
+    """List the subtitle tracks on a timeline (1-based indices)."""
+    count = timeline.GetTrackCount("subtitle") or 0
+    tracks = []
+    for index in range(1, count + 1):
+        items = timeline.GetItemListInTrack("subtitle", index) or []
+        track: Dict[str, Any] = {
+            "index": index,
+            "name": timeline.GetTrackName("subtitle", index) or f"Subtitle {index}",
+            "item_count": len(items),
+        }
+        try:
+            track["enabled"] = timeline.GetIsTrackEnabled("subtitle", index)
+        except Exception:
+            pass  # not available on older Resolve versions
+        tracks.append(track)
+    return tracks
+
+
+def get_subtitle_track_segments(timeline, track_index: int) -> List[Dict[str, Any]]:
+    """Read the subtitle items on a track as {start, end, text} in seconds.
+
+    start/end are relative to the timeline start (matching SRT and
+    transcription timestamps). The text comes from TimelineItem.GetName(),
+    which holds the subtitle text for subtitle items.
+    """
+    items = timeline.GetItemListInTrack("subtitle", track_index)
+    if not items:
+        raise RuntimeError(f"No subtitle items found on subtitle track {track_index}")
+
+    fps = _timeline_fps(timeline)
+    start_frame = timeline.GetStartFrame() or 0
+
+    segments = []
+    for item in items:
+        segments.append({
+            "start": (item.GetStart() - start_frame) / fps,
+            "end": (item.GetEnd() - start_frame) / fps,
+            "text": (item.GetName() or "").strip(),
+        })
+    return segments
+
+
+def _subtitle_track_item_counts(timeline) -> Dict[int, int]:
+    """Snapshot {track_index: item_count} for all subtitle tracks."""
+    counts = {}
+    for index in range(1, (timeline.GetTrackCount("subtitle") or 0) + 1):
+        counts[index] = len(timeline.GetItemListInTrack("subtitle", index) or [])
+    return counts
+
+
+def write_subtitle_track(
+    timeline,
+    media_pool,
+    segments: List[Dict[str, Any]],
+    track_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Write segments as a new subtitle track on the timeline.
+
+    Generates an SRT file, imports it into the media pool and appends it to
+    the timeline. Returns {"track_index", "track_name", "segments_written",
+    "srt_path"}. The SRT file must stay on disk — the media pool clip
+    references it.
+    """
+    if not segments:
+        raise ValueError("No segments to write")
+
+    srt_content = segments_to_srt(segments)
+    tmp_dir = tempfile.mkdtemp(prefix="resolve_srt_")
+    safe_name = "".join(
+        c if c.isalnum() or c in "-_ " else "_" for c in (track_name or "subtitles")
+    ).strip() or "subtitles"
+    srt_path = os.path.join(tmp_dir, f"{safe_name}.srt")
+    with open(srt_path, "w", encoding="utf-8") as f:
+        f.write(srt_content)
+
+    before = _subtitle_track_item_counts(timeline)
+
+    # Add a fresh track so the import doesn't merge into an existing one.
+    # AddTrack may not exist on older Resolve versions — then the import
+    # decides the target track itself.
+    try:
+        timeline.AddTrack("subtitle")
+    except Exception as e:
+        logger.debug("AddTrack('subtitle') failed: %s", e)
+
+    imported = media_pool.ImportMedia([srt_path])
+    if not imported:
+        raise RuntimeError(f"Failed to import SRT into media pool: {srt_path}")
+
+    if not media_pool.AppendToTimeline(imported):
+        raise RuntimeError(
+            "AppendToTimeline failed for the imported SRT — "
+            "subtitles were not added to the timeline"
+        )
+
+    # Find which subtitle track received the items
+    after = _subtitle_track_item_counts(timeline)
+    target_index = None
+    for index, count in after.items():
+        if count > before.get(index, 0):
+            target_index = index
+            break
+
+    if target_index is not None and track_name:
+        timeline.SetTrackName("subtitle", target_index, track_name)
+
+    return {
+        "track_index": target_index,
+        "track_name": track_name,
+        "segments_written": len(segments),
+        "srt_path": srt_path,
+    }
+
+
+def correct_subtitle_track(
+    timeline,
+    media_pool,
+    track_index: int,
+    corrected_segments: List[Any],
+) -> Dict[str, Any]:
+    """Replace the TEXT of a subtitle track without touching its timing.
+
+    corrected_segments must have exactly one entry per subtitle item on the
+    track, in order — either plain strings or dicts with a "text" key. Any
+    timing fields in the input are deliberately ignored; start/end always
+    come from the existing items.
+
+    Because the Resolve API cannot edit subtitle text in place, this writes
+    a new track ("<name> (corrected)") with the original timing and disables
+    the original track. Nothing is deleted.
+    """
+    existing = get_subtitle_track_segments(timeline, track_index)
+    if len(corrected_segments) != len(existing):
+        raise ValueError(
+            f"Segment count mismatch: track {track_index} has {len(existing)} "
+            f"subtitle items but {len(corrected_segments)} corrections were given"
+        )
+
+    segments = []
+    for original, correction in zip(existing, corrected_segments):
+        text = correction.get("text") if isinstance(correction, dict) else str(correction)
+        if not text or not text.strip():
+            text = original["text"]  # empty correction → keep original text
+        segments.append({
+            "start": original["start"],  # timing always from the existing item
+            "end": original["end"],
+            "text": text.strip(),
+        })
+
+    original_name = timeline.GetTrackName("subtitle", track_index) or f"Subtitle {track_index}"
+    result = write_subtitle_track(
+        timeline, media_pool, segments, f"{original_name} (corrected)"
+    )
+
+    try:
+        timeline.SetTrackEnable("subtitle", track_index, False)
+        result["original_track_disabled"] = track_index
+    except Exception as e:
+        logger.debug("SetTrackEnable failed: %s", e)
+        result["original_track_disabled"] = None
+
+    return result
+
+
+# ── Correction mapping ──────────────────────────────────────────────
+
+def map_transcription_to_segments(
+    existing_segments: List[Dict[str, Any]],
+    transcription: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Map a fresh transcription onto existing subtitle timing windows.
+
+    For each existing segment window, collect the transcribed words (or
+    whole segments, when word timestamps are unavailable) whose midpoint
+    falls inside the window; out-of-window units are assigned to the
+    nearest window so no text is lost. Returns segments with the ORIGINAL
+    timing, the proposed corrected text and the original text for review.
+    """
+    if not existing_segments:
+        raise ValueError("No existing segments to map onto")
+
+    # Prefer word-level units; fall back to whole whisper segments
+    units: List[Dict[str, Any]] = []
+    for seg in transcription.get("segments", []):
+        if seg.get("words"):
+            units.extend(seg["words"])
+        else:
+            units.append(seg)
+
+    def nearest_window(midpoint: float) -> int:
+        for i, win in enumerate(existing_segments):
+            if win["start"] <= midpoint < win["end"]:
+                return i
+        # Outside all windows → closest by boundary distance
+        return min(
+            range(len(existing_segments)),
+            key=lambda i: min(
+                abs(midpoint - existing_segments[i]["start"]),
+                abs(midpoint - existing_segments[i]["end"]),
+            ),
+        )
+
+    buckets: List[List[str]] = [[] for _ in existing_segments]
+    for unit in units:
+        midpoint = (unit["start"] + unit["end"]) / 2
+        buckets[nearest_window(midpoint)].append(unit["text"].strip())
+
+    result = []
+    for window, words in zip(existing_segments, buckets):
+        corrected = " ".join(w for w in words if w).strip()
+        result.append({
+            "start": window["start"],
+            "end": window["end"],
+            "text": corrected or window["text"],  # no speech mapped → keep original
+            "original_text": window["text"],
+        })
+    return result

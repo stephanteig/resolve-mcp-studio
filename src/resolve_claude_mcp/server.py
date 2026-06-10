@@ -17,7 +17,13 @@ from typing import AsyncIterator, Dict, Any, List, Optional
 from .connection import get_resolve_connection, ResolveConnection
 from .transcription import (
     transcribe as _transcribe,
+    transcribe_audio as _transcribe_audio,
     segments_to_srt,
+    get_subtitle_tracks as _get_subtitle_tracks,
+    get_subtitle_track_segments as _get_subtitle_track_segments,
+    write_subtitle_track as _write_subtitle_track,
+    correct_subtitle_track as _correct_subtitle_track,
+    map_transcription_to_segments as _map_transcription_to_segments,
     WHISPER_MODELS,
     DEFAULT_MODEL,
 )
@@ -1064,6 +1070,225 @@ def create_subtitles_from_audio(
 
         result = timeline.CreateSubtitlesFromAudio(settings)
         return _ok(result, "Subtitles generated from audio successfully", "Failed to generate subtitles")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  TRANSCRIPTION & SUBTITLE TRACKS (mlx-whisper)
+# ═══════════════════════════════════════════════════════════════════
+
+# Whisper expects ISO 639-1 codes; accept human-friendly names too
+_LANGUAGE_ALIASES = {
+    "auto": None,
+    "norsk": "no", "norwegian": "no", "no": "no", "nb": "no",
+    "engelsk": "en", "english": "en", "en": "en",
+}
+
+
+def _normalize_language(language: Optional[str]) -> Optional[str]:
+    """Map a language name/code to an ISO code for whisper (None = auto)."""
+    if language is None:
+        return None
+    key = language.strip().lower()
+    if key in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[key]
+    return key  # assume the caller passed a valid ISO code
+
+
+def _render_timeline_audio(project) -> str:
+    """Render the current timeline's audio to a temp WAV file.
+
+    Uses the render queue (audio-only job) — the job is removed again
+    after rendering, but the current render settings are altered.
+    Returns the path to the rendered file.
+    """
+    import time
+
+    tmp_dir = tempfile.mkdtemp(prefix="resolve_transcribe_")
+
+    if not project.SetCurrentRenderFormatAndCodec("wav", "lpcm"):
+        raise RuntimeError(
+            "Could not set render format to WAV/Linear PCM — "
+            "check available formats with get_render_formats"
+        )
+    if not project.SetRenderSettings({
+        "SelectAllFrames": True,
+        "ExportVideo": False,
+        "ExportAudio": True,
+        "TargetDir": tmp_dir,
+        "CustomName": "timeline_audio",
+    }):
+        raise RuntimeError("SetRenderSettings failed for audio-only render")
+
+    job_id = project.AddRenderJob()
+    if not job_id:
+        raise RuntimeError("AddRenderJob failed")
+
+    try:
+        if not project.StartRendering([job_id]):
+            raise RuntimeError("StartRendering failed")
+
+        deadline = time.time() + 1800  # 30 min ceiling
+        while project.IsRenderingInProgress():
+            if time.time() > deadline:
+                project.StopRendering()
+                raise TimeoutError("Audio render did not finish within 30 minutes")
+            time.sleep(1)
+
+        status = project.GetRenderJobStatus(job_id) or {}
+        if status.get("JobStatus") != "Complete":
+            raise RuntimeError(f"Audio render failed: {status}")
+    finally:
+        try:
+            project.DeleteRenderJob(job_id)
+        except Exception:
+            logger.debug("Could not delete render job %s", job_id)
+
+    files = [f for f in os.listdir(tmp_dir) if f.lower().endswith(".wav")]
+    if not files:
+        raise RuntimeError(f"Render reported success but no WAV found in {tmp_dir}")
+    return os.path.join(tmp_dir, files[0])
+
+
+@mcp.tool()
+def get_timeline_subtitle_tracks() -> str:
+    """
+    List the subtitle tracks on the current timeline.
+
+    Returns JSON with project/timeline name and per track: index (1-based),
+    name, item_count and enabled state. Use the index as track_index for
+    transcribe_timeline_audio / write_subtitles_to_resolve in correct mode.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        timeline = _require_timeline(conn)
+        return json.dumps({
+            "project": project.GetName(),
+            "timeline": timeline.GetName(),
+            "subtitle_tracks": _get_subtitle_tracks(timeline),
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def transcribe_timeline_audio(
+    language: str = "auto",
+    output_mode: str = "new",
+    track_index: Optional[int] = None,
+    model: str = DEFAULT_MODEL,
+) -> str:
+    """
+    Transcribe the current timeline's audio locally with mlx-whisper.
+
+    Renders the timeline audio to a temporary WAV via the render queue
+    (the temporary job is cleaned up, but current render settings are
+    changed), then transcribes. Nothing is written to the timeline —
+    review the returned segments, then call write_subtitles_to_resolve.
+
+    Parameters:
+    - language: "auto", "norsk"/"no", "engelsk"/"en" or any ISO 639-1 code
+    - output_mode: "new" → segments for a new subtitle track.
+      "correct" → map the transcription onto the timing of an EXISTING
+      subtitle track; each returned segment keeps the original timing and
+      includes both the proposed text and original_text for comparison.
+    - track_index: required when output_mode="correct" (1-based, see
+      get_timeline_subtitle_tracks)
+    - model: whisper model ("tiny", "base", "small", "medium", "large",
+      "turbo" or a HuggingFace repo path)
+
+    May take a while for long timelines (render + transcription).
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        timeline = _require_timeline(conn)
+
+        if output_mode not in ("new", "correct"):
+            return "Error: output_mode must be 'new' or 'correct'"
+        if output_mode == "correct" and track_index is None:
+            return "Error: track_index is required when output_mode='correct'"
+
+        existing = None
+        if output_mode == "correct":
+            # Read the existing track BEFORE the slow render+transcribe,
+            # so an invalid track_index fails fast
+            existing = _get_subtitle_track_segments(timeline, track_index)
+
+        audio_path = _render_timeline_audio(project)
+        transcription = _transcribe_audio(
+            audio_path,
+            language=_normalize_language(language),
+            model=model,
+            word_timestamps=(output_mode == "correct"),
+        )
+
+        if output_mode == "correct":
+            segments = _map_transcription_to_segments(existing, transcription)
+        else:
+            segments = transcription["segments"]
+
+        return json.dumps({
+            "project": project.GetName(),
+            "timeline": timeline.GetName(),
+            "language": transcription["language"],
+            "output_mode": output_mode,
+            "track_index": track_index,
+            "segment_count": len(segments),
+            "segments": segments,
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def write_subtitles_to_resolve(
+    segments: List[Dict[str, Any]],
+    output_mode: str = "new",
+    track_name: Optional[str] = None,
+    track_index: Optional[int] = None,
+) -> str:
+    """
+    Write an approved transcription to the current timeline.
+
+    Parameters:
+    - segments: list of {"start": float, "end": float, "text": str}
+      (seconds relative to timeline start) — typically the reviewed output
+      of transcribe_timeline_audio
+    - output_mode: "new" → write segments as a new subtitle track.
+      "correct" → replace ONLY the text of the subtitle track at
+      track_index; timing always comes from the existing items (any
+      timing in the segments is ignored). Because the Resolve API cannot
+      edit subtitle text in place, the corrected version is written as a
+      new track and the original track is disabled — never deleted.
+    - track_name: optional name for the new track
+    - track_index: required when output_mode="correct" (1-based)
+
+    Returns a JSON report with project/timeline name and the result.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        timeline = _require_timeline(conn)
+        media_pool = conn.get_media_pool()
+
+        if output_mode == "new":
+            result = _write_subtitle_track(timeline, media_pool, segments, track_name)
+        elif output_mode == "correct":
+            if track_index is None:
+                return "Error: track_index is required when output_mode='correct'"
+            result = _correct_subtitle_track(timeline, media_pool, track_index, segments)
+        else:
+            return "Error: output_mode must be 'new' or 'correct'"
+
+        return json.dumps({
+            "project": project.GetName(),
+            "timeline": timeline.GetName(),
+            "output_mode": output_mode,
+            **result,
+        }, indent=2, ensure_ascii=False)
     except Exception as e:
         return f"Error: {e}"
 
