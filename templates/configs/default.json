@@ -1,5 +1,6 @@
 {
   "name": "Standard (3 timelines)",
+  "drp": "_TEMPLATE_.drp",
   "resolution": "3840x2160",
   "fps": 25,
   "audio_channels": 2,
