@@ -40,6 +40,7 @@ from .media_pool import (
     read_finder_structure as _read_finder_structure,
     sync_structure_to_media_pool as _sync_structure_to_media_pool,
 )
+from .clip_colors import propose_color as _propose_clip_color
 from .resolve_utils import (
     folder_to_dict,
     clip_to_dict,
@@ -1397,6 +1398,152 @@ def sync_finder_folder_to_media_pool(folder_path: str) -> str:
             "synced_path": structure["path"],
             **report,
         }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  AUTO CLIP COLOR
+# ═══════════════════════════════════════════════════════════════════
+
+def _collect_clips_for_coloring(conn, source: str):
+    """Collect unique MediaPoolItems from the timeline or the media pool.
+
+    Returns (clips, skipped) where clips is a list of MediaPoolItem and
+    skipped counts timeline items without a media pool clip (titles,
+    generators).
+    """
+    seen = set()
+    clips = []
+    skipped = 0
+
+    def _add(clip):
+        try:
+            key = clip.GetUniqueId()
+        except Exception:
+            key = clip.GetName()
+        if key not in seen:
+            seen.add(key)
+            clips.append(clip)
+
+    if source == "timeline":
+        timeline = _require_timeline(conn)
+        for track_type in ("video", "audio"):
+            for index in range(1, (timeline.GetTrackCount(track_type) or 0) + 1):
+                for item in timeline.GetItemListInTrack(track_type, index) or []:
+                    clip = None
+                    try:
+                        clip = item.GetMediaPoolItem()
+                    except Exception:
+                        pass
+                    if clip is None:  # Text+, generators, etc.
+                        skipped += 1
+                        continue
+                    _add(clip)
+    elif source == "media_pool":
+        media_pool = conn.get_media_pool()
+
+        def _walk(folder):
+            for clip in folder.GetClipList() or []:
+                # Skip non-media entries in the pool (timelines, imported
+                # subtitles, Fusion titles/generators)
+                clip_type = None
+                try:
+                    clip_type = clip.GetClipProperty("Type")
+                except Exception:
+                    pass
+                if clip_type in ("Timeline", "Subtitle") or (
+                    clip_type and "fusion" in clip_type.lower()
+                ):
+                    continue
+                _add(clip)
+            for sub in folder.GetSubFolderList() or []:
+                _walk(sub)
+
+        _walk(media_pool.GetRootFolder())
+    else:
+        raise ValueError("source must be 'timeline' or 'media_pool'")
+
+    return clips, skipped
+
+
+@mcp.tool()
+def auto_color_clips(
+    source: str = "timeline",
+    dry_run: bool = True,
+) -> str:
+    """
+    Categorize clips from filename + metadata and set clip colors.
+
+    Categories: Drone/luftfoto → Yellow, Talking head/intervju → Blue,
+    B-roll/håndholdt → Green, Musikk/lyd → Pink, Grafikk/stillbilder →
+    Purple, Ukategorisert → Beige. (BUGFIX.md suggested Red and Cream for
+    the last two audio/uncategorized buckets, but those are not valid CLIP
+    colors in Resolve — Pink and Beige are the closest valid substitutes.)
+
+    ALWAYS run with dry_run=True first: it returns the proposed color per
+    clip (with the reason) without changing anything, so the user can
+    confirm. Call again with dry_run=False to apply the colors via
+    MediaPoolItem.SetClipColor.
+
+    Parameters:
+    - source: "timeline" (clips used on the current timeline; titles and
+      generators are skipped) or "media_pool" (every clip in every bin)
+    - dry_run: True = preview only (default), False = set the colors
+
+    Returns a JSON report with proposals and, when applying, how many
+    colors were set or failed.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        clips, skipped = _collect_clips_for_coloring(conn, source)
+
+        proposals = []
+        for clip in clips:
+            properties = {}
+            try:
+                props = clip.GetClipProperty()
+                if isinstance(props, dict):
+                    properties = props
+            except Exception as e:
+                logger.debug("GetClipProperty() failed for %s: %s", clip.GetName(), e)
+
+            proposal = _propose_clip_color(clip.GetName(), properties)
+            proposal["current_color"] = clip.GetClipColor() or None
+            proposals.append((clip, proposal))
+
+        report: Dict[str, Any] = {
+            "project": project.GetName(),
+            "source": source,
+            "dry_run": dry_run,
+            "clip_count": len(proposals),
+            "skipped_non_media_items": skipped,
+        }
+
+        if dry_run:
+            report["proposals"] = [p for _, p in proposals]
+            report["note"] = (
+                "Ingen farger er satt. Bekreft forslagene og kall "
+                "auto_color_clips med dry_run=False for å sette dem."
+            )
+            return json.dumps(report, indent=2, ensure_ascii=False)
+
+        set_count = 0
+        failures = []
+        for clip, proposal in proposals:
+            if clip.SetClipColor(proposal["proposed_color"]):
+                set_count += 1
+            else:
+                failures.append({
+                    "clip": proposal["clip"],
+                    "color": proposal["proposed_color"],
+                    "reason": "SetClipColor returned False",
+                })
+        report["colors_set"] = set_count
+        report["failures"] = failures
+        report["proposals"] = [p for _, p in proposals]
+        return json.dumps(report, indent=2, ensure_ascii=False)
     except Exception as e:
         return f"Error: {e}"
 
