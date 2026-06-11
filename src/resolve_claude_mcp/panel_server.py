@@ -33,7 +33,13 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
-from .markers import parse_marker_list, timecode_to_frame, VALID_MARKER_COLORS, DEFAULT_COLOR
+from .markers import (
+    parse_marker_list,
+    timecode_to_frame,
+    frame_to_timecode,
+    VALID_MARKER_COLORS,
+    DEFAULT_COLOR,
+)
 from .transcription import (
     transcribe_audio,
     get_subtitle_tracks,
@@ -180,6 +186,27 @@ def _api_markers_pending() -> Dict[str, Any]:
     global _pending_markers
     with _pending_markers_lock:
         markers, _pending_markers = _pending_markers, []
+    return {"markers": markers}
+
+
+def _api_markers_timeline() -> Dict[str, Any]:
+    """Read the existing markers on the current timeline for the editor."""
+    conn = _conn()
+    timeline = _require_timeline(conn)
+    fps = _timeline_fps(timeline)
+
+    raw = timeline.GetMarkers() or {}
+    markers = []
+    for frame_key, info in sorted(raw.items(), key=lambda kv: int(kv[0])):
+        frame = int(frame_key)
+        markers.append({
+            "frame": frame,
+            "timecode": frame_to_timecode(frame, fps),
+            "name": info.get("name", ""),
+            "color": info.get("color", DEFAULT_COLOR),
+            "note": info.get("note", ""),
+            "duration": info.get("duration", 1),
+        })
     return {"markers": markers}
 
 
@@ -360,6 +387,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 self._send_json(_api_status())
             elif path == "/api/markers/pending":
                 self._send_json(_api_markers_pending())
+            elif path == "/api/markers/timeline":
+                self._send_json(_api_markers_timeline())
             elif path == "/api/subtitle-tracks":
                 self._send_json(_api_subtitle_tracks())
             elif path.startswith("/api/transcribe/"):

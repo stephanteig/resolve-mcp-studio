@@ -133,6 +133,28 @@
     parseInfoEl.textContent = markers.length + ' markers mottatt fra Claude';
   }
 
+  // Load the existing markers from the active timeline into the editor
+  async function loadFromTimeline() {
+    parseInfoEl.textContent = 'Laster…';
+    try {
+      const result = await Panel.api('/api/markers/timeline');
+      markers = result.markers.map(function (m) {
+        return {
+          timecode: m.timecode,
+          name: m.name || '',
+          color: m.color || 'Blue',
+          note: m.note || '',
+        };
+      });
+      render();
+      parseInfoEl.textContent = result.markers.length
+        ? result.markers.length + ' markers lastet fra timeline'
+        : 'Ingen markers på timeline';
+    } catch (e) {
+      parseInfoEl.textContent = 'Feil: ' + e.message;
+    }
+  }
+
   async function sendToResolve() {
     if (!markers.length) {
       setReport('Ingen markers å sende', false);
@@ -165,6 +187,7 @@
       render();
     });
     document.getElementById('marker-parse-btn').addEventListener('click', parsePasted);
+    document.getElementById('marker-load-btn').addEventListener('click', loadFromTimeline);
     document.getElementById('marker-send-btn').addEventListener('click', sendToResolve);
     render();
     setInterval(pollPendingMarkers, 2000);
