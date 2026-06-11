@@ -48,6 +48,7 @@ from .transcription import (
     correct_subtitle_track,
     map_transcription_to_segments,
 )
+from .media_pool import read_finder_structure, sync_structure_to_media_pool
 from .server import _conn, _require_timeline, _render_timeline_audio, _normalize_language
 
 logger = logging.getLogger("ResolveMCP")
@@ -284,6 +285,25 @@ def _api_transcribe_status(job_id: str) -> Dict[str, Any]:
         return dict(job)
 
 
+def _api_media_pool_sync(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Run a Finder → Media Pool sync for a root folder."""
+    folder_path = (body.get("folder_path") or "").strip()
+    if not folder_path:
+        raise ValueError("folder_path is required")
+
+    conn = _conn()
+    project = conn.get_project()
+    media_pool = conn.get_media_pool()
+
+    structure = read_finder_structure(folder_path)
+    report = sync_structure_to_media_pool(media_pool, structure)
+    return {
+        "project": project.GetName(),
+        "synced_path": structure["path"],
+        **report,
+    }
+
+
 def _api_subtitles_write(body: Dict[str, Any]) -> Dict[str, Any]:
     segments = body.get("segments", [])
     output_mode = body.get("output_mode", "new")
@@ -343,7 +363,7 @@ class PanelHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _send_error_json(self, e: Exception):
-        status = 400 if isinstance(e, (ValueError, KeyError)) else 500
+        status = 400 if isinstance(e, (ValueError, KeyError, NotADirectoryError)) else 500
         self._send_json({"error": str(e)}, status)
 
     def _read_body(self) -> Dict[str, Any]:
@@ -413,6 +433,8 @@ class PanelHandler(BaseHTTPRequestHandler):
                 self._send_json(_api_markers_set(body))
             elif path == "/api/transcribe":
                 self._send_json(_api_transcribe_start(body))
+            elif path == "/api/media-pool/sync":
+                self._send_json(_api_media_pool_sync(body))
             elif path == "/api/subtitles/write":
                 self._send_json(_api_subtitles_write(body))
             else:
