@@ -1115,11 +1115,17 @@ def _render_timeline_audio(project) -> str:
 
     tmp_dir = tempfile.mkdtemp(prefix="resolve_transcribe_")
 
-    if not project.SetCurrentRenderFormatAndCodec("wav", "lpcm"):
-        raise RuntimeError(
-            "Could not set render format to WAV/Linear PCM — "
-            "check available formats with get_render_formats"
-        )
+    # The API's format key is "Wave" (GetRenderFormats → {'Wave': 'wav'}) and
+    # Wave has no codec list (GetRenderCodecs('Wave') → {}). Try the explicit
+    # codec name, then an empty codec. On versions where neither is accepted
+    # (e.g. Resolve 21 beta), fall back to the built-in "Audio Only" preset.
+    if not project.SetCurrentRenderFormatAndCodec("Wave", "Linear PCM"):
+        if not project.SetCurrentRenderFormatAndCodec("Wave", ""):
+            if not project.LoadRenderPreset("Audio Only"):
+                raise RuntimeError(
+                    "Could not set render format to Wave and the 'Audio Only' "
+                    "render preset is unavailable — check get_render_formats"
+                )
     if not project.SetRenderSettings({
         "SelectAllFrames": True,
         "ExportVideo": False,
@@ -1153,9 +1159,14 @@ def _render_timeline_audio(project) -> str:
         except Exception:
             logger.debug("Could not delete render job %s", job_id)
 
-    files = [f for f in os.listdir(tmp_dir) if f.lower().endswith(".wav")]
+    # The "Audio Only" preset fallback may produce another container than
+    # .wav — accept anything ffmpeg/whisper can read.
+    files = [
+        f for f in os.listdir(tmp_dir)
+        if f.lower().endswith((".wav", ".mov", ".mp4", ".aif", ".aiff", ".mp3", ".m4a", ".mxf"))
+    ]
     if not files:
-        raise RuntimeError(f"Render reported success but no WAV found in {tmp_dir}")
+        raise RuntimeError(f"Render reported success but no audio file found in {tmp_dir}")
     return os.path.join(tmp_dir, files[0])
 
 
