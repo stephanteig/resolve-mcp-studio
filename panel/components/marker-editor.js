@@ -111,6 +111,28 @@
     }
   }
 
+  // Poll for markers pushed by Claude (via parse_and_preview_markers).
+  // The endpoint returns-and-clears, so each push is consumed exactly once.
+  async function pollPendingMarkers() {
+    let result;
+    try {
+      result = await Panel.api('/api/markers/pending');
+    } catch (e) {
+      return; // bridge unreachable — silently skip this round
+    }
+    if (!result.markers || !result.markers.length) return;
+    markers = result.markers.map(function (m) {
+      return {
+        timecode: m.timecode || '00:00:00:00',
+        name: m.name || '',
+        color: m.color || 'Blue',
+        note: m.note || '',
+      };
+    });
+    render();
+    parseInfoEl.textContent = markers.length + ' markers mottatt fra Claude';
+  }
+
   async function sendToResolve() {
     if (!markers.length) {
       setReport('Ingen markers å sende', false);
@@ -145,5 +167,6 @@
     document.getElementById('marker-parse-btn').addEventListener('click', parsePasted);
     document.getElementById('marker-send-btn').addEventListener('click', sendToResolve);
     render();
+    setInterval(pollPendingMarkers, 2000);
   });
 })();
