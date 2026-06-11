@@ -86,11 +86,25 @@
         <div class="report" id="tr-report"></div>
       </div>
     </section>
+    <!-- Media Pool sync -->
+    <section class="panel-section" id="media-pool-sync">
+      <h2>Media Pool Sync</h2>
+      <div class="field">
+        <label for="sync-path">Rotmappe</label>
+        <input type="text" id="sync-path" class="mono" placeholder="/Volumes/...">
+      </div>
+      <div class="row">
+        <button id="sync-btn" class="btn btn-primary">Synk til Resolve</button>
+        <span class="hint" id="sync-status"></span>
+      </div>
+      <div class="report" id="sync-report"></div>
+    </section>
   </main>
 
   <script src="panel.js"></script>
   <script src="components/status.js"></script>
   <script src="components/marker-editor.js"></script>
   <script src="components/transcription.js"></script>
+  <script src="components/media-pool-sync.js"></script>
 </body>
 </html>
