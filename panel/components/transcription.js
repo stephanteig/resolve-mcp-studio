@@ -136,6 +136,12 @@
     setReport('Skriver…', true);
     try {
       const result = await Panel.api('/api/subtitles/write', body);
+      if (result.placed === false) {
+        // API couldn't place the SRT on this Resolve version — manual import
+        setReport('Kunne ikke plassere subtitles automatisk på denne '
+          + 'Resolve-versjonen.\n\n' + result.instructions, false);
+        return;
+      }
       let text = result.segments_written + ' segmenter skrevet til track '
         + result.track_index + (result.track_name ? ' ("' + result.track_name + '")' : '')
         + ' på "' + result.timeline + '"';

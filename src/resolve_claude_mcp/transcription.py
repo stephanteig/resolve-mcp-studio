@@ -326,9 +326,15 @@ def write_subtitle_track(
     """Write segments as a new subtitle track on the timeline.
 
     Generates an SRT file, imports it into the media pool and appends it to
-    the timeline. Returns {"track_index", "track_name", "segments_written",
-    "srt_path"}. The SRT file must stay on disk — the media pool clip
-    references it.
+    the timeline. Placement is VERIFIED: on Resolve versions where
+    AppendToTimeline silently fails for subtitle clips (returns [None],
+    e.g. Resolve 21 beta — InsertSubtitleIntoTimeline/ImportIntoTimeline/
+    SetName were all probed and don't work either), the result has
+    "placed": False with the SRT path and instructions for manual import.
+
+    Returns {"placed", "track_index", "track_name", "segments_written",
+    "srt_path"} (+ "instructions" when placed is False). The SRT file must
+    stay on disk — the media pool clip references it.
     """
     if not segments:
         raise ValueError("No segments to write")
@@ -356,13 +362,9 @@ def write_subtitle_track(
     if not imported:
         raise RuntimeError(f"Failed to import SRT into media pool: {srt_path}")
 
-    if not media_pool.AppendToTimeline(imported):
-        raise RuntimeError(
-            "AppendToTimeline failed for the imported SRT — "
-            "subtitles were not added to the timeline"
-        )
+    media_pool.AppendToTimeline(imported)  # return value is unreliable — verify below
 
-    # Find which subtitle track received the items
+    # Verify by item counts which subtitle track actually received the items
     after = _subtitle_track_item_counts(timeline)
     target_index = None
     for index, count in after.items():
@@ -370,14 +372,41 @@ def write_subtitle_track(
             target_index = index
             break
 
-    if target_index is not None and track_name:
-        timeline.SetTrackName("subtitle", target_index, track_name)
+    if target_index is not None:
+        if track_name:
+            timeline.SetTrackName("subtitle", target_index, track_name)
+        return {
+            "placed": True,
+            "track_index": target_index,
+            "track_name": track_name,
+            "segments_written": len(segments),
+            "srt_path": srt_path,
+        }
+
+    # Nothing landed — remove the empty track we just added (if we did and
+    # it's still empty) and fall back to manual import.
+    added_index = max(after) if len(after) > len(before) else None
+    if added_index is not None and after.get(added_index, 0) == 0:
+        try:
+            timeline.DeleteTrack("subtitle", added_index)
+        except Exception as e:
+            logger.debug("DeleteTrack('subtitle', %s) failed: %s", added_index, e)
 
     return {
-        "track_index": target_index,
+        "placed": False,
+        "track_index": None,
         "track_name": track_name,
         "segments_written": len(segments),
         "srt_path": srt_path,
+        "instructions": (
+            "Resolve's scripting API could not place the subtitles on the "
+            f"timeline (AppendToTimeline is unreliable for SRT on this "
+            f"Resolve version). The SRT file is ready at: {srt_path} — "
+            "import it manually: open the Edit page, then either "
+            "File → Import → Subtitle… and pick the file, or right-click "
+            f"the imported clip '{safe_name}' in the Media Pool and choose "
+            "'Insert Selected Subtitles to Timeline Using Timecode'."
+        ),
     }
 
 
@@ -421,12 +450,22 @@ def correct_subtitle_track(
         timeline, media_pool, segments, f"{original_name} (corrected)"
     )
 
-    try:
-        timeline.SetTrackEnable("subtitle", track_index, False)
-        result["original_track_disabled"] = track_index
-    except Exception as e:
-        logger.debug("SetTrackEnable failed: %s", e)
+    # Only disable the original once the corrected track is actually on the
+    # timeline — on the manual-import fallback the user does this themselves.
+    if result.get("placed"):
+        try:
+            timeline.SetTrackEnable("subtitle", track_index, False)
+            result["original_track_disabled"] = track_index
+        except Exception as e:
+            logger.debug("SetTrackEnable failed: %s", e)
+            result["original_track_disabled"] = None
+    else:
         result["original_track_disabled"] = None
+        result["instructions"] += (
+            f" After importing, disable the original subtitle track "
+            f"{track_index} ('{original_name}') manually — it was left "
+            "enabled since the corrected track isn't on the timeline yet."
+        )
 
     return result
 
