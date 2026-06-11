@@ -394,11 +394,39 @@ def get_markers() -> str:
         return f"Error: {e}"
 
 
+def _push_markers_to_panel(markers: List[Dict[str, Any]]) -> bool:
+    """Best-effort push of parsed markers to the panel bridge, if running.
+
+    The panel bridge (panel_server.py) is a separate localhost process —
+    when it's up, pushed markers appear in the panel's marker editor
+    within its 2s poll interval. Failure is never an error: the panel
+    is optional.
+    """
+    import urllib.request
+    port = int(os.getenv("RESOLVE_MCP_PANEL_PORT", "8765"))
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/markers/load",
+        data=json.dumps({"markers": markers}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=1.5) as response:
+            return response.status == 200
+    except Exception as e:
+        logger.debug("Panel marker push skipped: %s", e)
+        return False
+
+
 @mcp.tool()
 def parse_and_preview_markers(text: str, fps: Optional[float] = None) -> str:
     """
     Parse a free-text list of timecodes + descriptions into structured
     markers, ready for review BEFORE they are written to the timeline.
+
+    If the panel bridge is running, the parsed markers are also pushed to
+    the panel's marker editor for visual review/editing (the response
+    field "pushed_to_panel" tells whether that happened).
 
     Supported line formats (description follows the timecode):
     - "MM:SS text"        e.g. "02:15 fjern pause"
@@ -432,6 +460,7 @@ def parse_and_preview_markers(text: str, fps: Optional[float] = None) -> str:
             fps = float(fps_setting)
 
         markers, skipped = parse_marker_list(text, fps)
+        pushed = _push_markers_to_panel(markers) if markers else False
         return json.dumps({
             "project": project.GetName(),
             "timeline": timeline.GetName(),
@@ -439,6 +468,7 @@ def parse_and_preview_markers(text: str, fps: Optional[float] = None) -> str:
             "marker_count": len(markers),
             "markers": markers,
             "skipped_lines": skipped,
+            "pushed_to_panel": pushed,
         }, indent=2, ensure_ascii=False)
     except Exception as e:
         return f"Error: {e}"

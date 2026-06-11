@@ -63,6 +63,11 @@ _MIME_TYPES = {
 _jobs: Dict[str, Dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
 
+# ── Pending markers (pushed by the MCP server, polled by the panel) ──
+
+_pending_markers: list = []
+_pending_markers_lock = threading.Lock()
+
 
 def _panel_dir() -> Path:
     override = os.getenv(PANEL_DIR_ENV_VAR)
@@ -157,6 +162,25 @@ def _api_markers_set(body: Dict[str, Any]) -> Dict[str, Any]:
         "set": set_count,
         "failures": failures,
     }
+
+
+def _api_markers_load(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Receive a marker list pushed by Claude (via the MCP server)."""
+    global _pending_markers
+    markers = body.get("markers")
+    if not isinstance(markers, list):
+        raise ValueError("markers must be a list")
+    with _pending_markers_lock:
+        _pending_markers = list(markers)
+    return {"ok": True, "count": len(markers)}
+
+
+def _api_markers_pending() -> Dict[str, Any]:
+    """Return and clear the pushed marker list (polled by the panel)."""
+    global _pending_markers
+    with _pending_markers_lock:
+        markers, _pending_markers = _pending_markers, []
+    return {"markers": markers}
 
 
 def _api_subtitle_tracks() -> Dict[str, Any]:
@@ -334,6 +358,8 @@ class PanelHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/status":
                 self._send_json(_api_status())
+            elif path == "/api/markers/pending":
+                self._send_json(_api_markers_pending())
             elif path == "/api/subtitle-tracks":
                 self._send_json(_api_subtitle_tracks())
             elif path.startswith("/api/transcribe/"):
@@ -352,6 +378,8 @@ class PanelHandler(BaseHTTPRequestHandler):
             body = self._read_body()
             if path == "/api/markers/parse":
                 self._send_json(_api_markers_parse(body))
+            elif path == "/api/markers/load":
+                self._send_json(_api_markers_load(body))
             elif path == "/api/markers/set":
                 self._send_json(_api_markers_set(body))
             elif path == "/api/transcribe":
