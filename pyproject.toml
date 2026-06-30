@@ -10,6 +10,8 @@ dependencies = [
     # macOS-only: used by the screenshot tool to target the Resolve window.
     # On other platforms the screenshot tool is unavailable; it's fine that
     # this isn't installed.
+    "mlx-whisper>=0.4.3",
+    "numpy>=2.2.6",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
 ]
 
