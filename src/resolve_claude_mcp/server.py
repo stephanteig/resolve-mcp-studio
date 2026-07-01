@@ -5497,6 +5497,281 @@ def import_project(file_path: str, project_name: Optional[str] = None) -> str:
         return f"Error: {e}"
 
 
+# ── LAV PRIORITET ──
+
+
+@mcp.tool()
+def quit_resolve() -> str:
+    """Quit DaVinci Resolve application."""
+    try:
+        conn = _conn()
+        resolve = conn.get_resolve()
+        result = resolve.Quit()
+        return _ok(result, "Resolve quit successfully.", "Failed to quit Resolve.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def get_mounted_volumes() -> str:
+    """List mounted volumes available in Resolve's Media Storage."""
+    try:
+        conn = _conn()
+        storage = conn.get_media_storage()
+        volumes = storage.GetMountedVolumeList()
+        return json.dumps({"volumes": volumes or []}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def browse_media_storage(folder_path: str = "/") -> str:
+    """List files and subfolders at a Media Storage path.
+
+    Parameters:
+    - folder_path: Absolute path on disk to browse (default: root)
+    """
+    try:
+        conn = _conn()
+        storage = conn.get_media_storage()
+        subfolders = storage.GetSubFolderList(folder_path) or []
+        files = storage.GetFileList(folder_path) or []
+        return json.dumps({"path": folder_path, "subfolders": subfolders, "files": files}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def reveal_in_storage(file_path: str) -> str:
+    """Reveal a file or folder in Resolve's Media Storage panel.
+
+    Parameters:
+    - file_path: Absolute path to reveal
+    """
+    try:
+        conn = _conn()
+        storage = conn.get_media_storage()
+        result = storage.RevealInStorage(file_path)
+        return _ok(result, f"Revealed '{file_path}' in Media Storage.", f"Failed to reveal '{file_path}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def import_burn_in_preset(preset_path: str) -> str:
+    """Import a burn-in preset file into Resolve.
+
+    Parameters:
+    - preset_path: Absolute path to the burn-in preset file
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        result = project.ImportBurnInPreset(preset_path)
+        return _ok(result, f"Imported burn-in preset from '{preset_path}'.", "Failed to import burn-in preset.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def export_burn_in_preset(preset_name: str, export_path: str) -> str:
+    """Export a burn-in preset to a file.
+
+    Parameters:
+    - preset_name: Name of the preset to export
+    - export_path: Absolute path to write the preset file
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        result = project.ExportBurnInPreset(preset_name, export_path)
+        return _ok(result, f"Exported preset '{preset_name}' to '{export_path}'.", "Failed to export burn-in preset.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def create_stereo_clip(left_clip_name: str, right_clip_name: str) -> str:
+    """Create a stereoscopic 3D clip from two Media Pool clips.
+
+    Parameters:
+    - left_clip_name: Name of the left-eye clip in Media Pool
+    - right_clip_name: Name of the right-eye clip in Media Pool
+    """
+    try:
+        conn = _conn()
+        left = _find_clip_in_media_pool(conn, left_clip_name)
+        right = _find_clip_in_media_pool(conn, right_clip_name)
+        if not left:
+            return f"Error: Clip '{left_clip_name}' not found in Media Pool."
+        if not right:
+            return f"Error: Clip '{right_clip_name}' not found in Media Pool."
+        media_pool = conn.get_media_pool()
+        result = media_pool.CreateStereoClip(left, right)
+        return _ok(result, "Stereo clip created successfully.", "Failed to create stereo clip.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def convert_timeline_stereo() -> str:
+    """Convert the current timeline to stereoscopic 3D."""
+    try:
+        conn = _conn()
+        timeline = _require_timeline(conn)
+        result = timeline.ConvertTimelineToStereo()
+        return _ok(result, "Timeline converted to stereo.", "Failed to convert timeline to stereo.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def analyze_dolby_vision(track_type: str = "video", track_index: int = 1, item_indices: Optional[List[int]] = None, analysis_type: int = 0) -> str:
+    """Run Dolby Vision analysis on timeline items.
+
+    Parameters:
+    - track_type: Track type ('video')
+    - track_index: 1-based track index
+    - item_indices: List of 0-based item indices (None = all items on track)
+    - analysis_type: 0 = frame-by-frame, 1 = shot-based
+    """
+    try:
+        conn = _conn()
+        timeline = _require_timeline(conn)
+        items = timeline.GetItemListInTrack(track_type, track_index) or []
+        if item_indices is not None:
+            items = [items[i] for i in item_indices if 0 <= i < len(items)]
+        if not items:
+            return "Error: No items to analyze."
+        result = timeline.AnalyzeDolbyVision(items, analysis_type)
+        return _ok(result, f"Dolby Vision analysis started on {len(items)} item(s).", "Failed to start Dolby Vision analysis.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def cloud_project_management(action: str, project_name: str = "", cloud_settings: Optional[dict] = None) -> str:
+    """Manage cloud projects (create, restore, import, export).
+
+    Parameters:
+    - action: 'create_cloud', 'restore_cloud', 'import_cloud', 'export_cloud'
+    - project_name: Project name
+    - cloud_settings: Dict of cloud settings (see Resolve API docs)
+    """
+    try:
+        conn = _conn()
+        pm = conn.get_project_manager()
+        settings = cloud_settings or {}
+        if action == "create_cloud":
+            result = pm.CreateCloudProject(settings)
+            return _ok(result, "Cloud project created.", "Failed to create cloud project.")
+        elif action == "restore_cloud":
+            result = pm.RestoreCloudProject(project_name, settings)
+            return _ok(result, f"Cloud project '{project_name}' restored.", "Failed to restore cloud project.")
+        elif action == "import_cloud":
+            result = pm.ImportCloudProject(project_name, settings)
+            return _ok(result, f"Cloud project '{project_name}' imported.", "Failed to import cloud project.")
+        elif action == "export_cloud":
+            result = pm.ExportCloudProject(project_name, settings)
+            return _ok(result, f"Cloud project '{project_name}' exported.", "Failed to export cloud project.")
+        else:
+            return f"Unknown action '{action}'. Use 'create_cloud', 'restore_cloud', 'import_cloud', or 'export_cloud'."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def import_folder_from_file(drb_path: str, source_clips_path: str = "") -> str:
+    """Import a Media Pool bin from a .drb file.
+
+    Parameters:
+    - drb_path: Absolute path to the .drb file
+    - source_clips_path: Optional path to relocate source clips
+    """
+    try:
+        conn = _conn()
+        media_pool = conn.get_media_pool()
+        result = media_pool.ImportFolderFromFile(drb_path, source_clips_path)
+        return _ok(result, f"Folder imported from '{drb_path}'.", "Failed to import folder from file.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def get_render_resolutions(format_name: str = "", codec_name: str = "") -> str:
+    """Get available render resolutions for a given format and codec.
+
+    Parameters:
+    - format_name: Render format name (e.g. 'MP4')
+    - codec_name: Codec name (e.g. 'H.264 Master')
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        resolutions = project.GetRenderResolutions(format_name, codec_name) or []
+        return json.dumps({"format": format_name, "codec": codec_name, "resolutions": resolutions}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def delete_render_preset(preset_name: str) -> str:
+    """Delete a saved render preset by name.
+
+    Parameters:
+    - preset_name: Name of the render preset to delete
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        result = project.DeleteRenderPreset(preset_name)
+        return _ok(result, f"Render preset '{preset_name}' deleted.", f"Failed to delete render preset '{preset_name}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def manage_clip_mattes(clip_name: str, action: str = "list", matte_path: str = "") -> str:
+    """Read or delete matte files associated with a Media Pool clip.
+
+    Parameters:
+    - clip_name: Clip name in Media Pool
+    - action: 'list' or 'delete'
+    - matte_path: Path of matte to delete (only for action='delete')
+    """
+    try:
+        conn = _conn()
+        clip = _find_clip_in_media_pool(conn, clip_name)
+        if not clip:
+            return f"Error: Clip '{clip_name}' not found in Media Pool."
+        if action == "list":
+            mattes = clip.GetClipProperty("Matte") or []
+            return json.dumps({"clip": clip_name, "mattes": mattes}, indent=2, ensure_ascii=False)
+        elif action == "delete":
+            result = clip.DeleteClipMatte(matte_path)
+            return _ok(result, f"Matte '{matte_path}' deleted from '{clip_name}'.", "Failed to delete matte.")
+        else:
+            return f"Unknown action '{action}'. Use 'list' or 'delete'."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def add_timeline_mattes(matte_paths: List[str]) -> str:
+    """Add timeline matte files to the current project.
+
+    Parameters:
+    - matte_paths: List of absolute paths to matte files
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        result = project.AddTimelineMatte(matte_paths)
+        return _ok(result, f"Added {len(matte_paths)} timeline matte(s).", "Failed to add timeline mattes.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
 # ── Entry point ──
 
 def main():
