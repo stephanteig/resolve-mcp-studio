@@ -10,12 +10,13 @@
 |---|---|---|---|---|
 | PR 1 | `feature/tools-high-priority` | ✅ Ferdig — [PR #16](https://github.com/stephanteig/resolve-mcp-studio/pull/16) | 43 nye | 105 |
 | PR 2 | `feature/tools-medium-priority` | ✅ Ferdig — [PR #17](https://github.com/stephanteig/resolve-mcp-studio/pull/17) | 68 nye | 173 |
-| PR 3 | `feature/tools-low-priority` | 🔲 Ikke startet | ~15 nye | ~188 |
+| PR 3 | `feature/tools-low-priority` | ✅ Ferdig — [PR #18](https://github.com/stephanteig/resolve-mcp-studio/pull/18) | 15 nye | 188 |
 
 **Eksisterende tools ved start:** 62  
 **Etter PR 1:** 105  
 **Etter PR 2:** 173  
-**Mål:** ~188
+**Etter PR 3:** 188  
+**Mål:** ~188 ✅
 
 ---
 
@@ -230,9 +231,10 @@ Batch-pattern: optional `folder_name` (bin) eller `clip_name` (enkeltklipp).
 
 ---
 
-## 🔲 PR 3 — LAV prioritet (~15 tools)
+## ✅ PR 3 — LAV prioritet (ferdig)
 
-**Branch:** `feature/tools-low-priority` (ikke startet)
+**Branch:** `feature/tools-low-priority`  
+**PR:** [#18](https://github.com/stephanteig/resolve-mcp-studio/pull/18)
 
 | Tool | API | Status |
 |---|---|---|
