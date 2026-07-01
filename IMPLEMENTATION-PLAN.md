@@ -9,12 +9,13 @@
 | PR | Branch | Status | Tools | Totalt |
 |---|---|---|---|---|
 | PR 1 | `feature/tools-high-priority` | ✅ Ferdig — [PR #16](https://github.com/stephanteig/resolve-mcp-studio/pull/16) | 43 nye | 105 |
-| PR 2 | `feature/tools-medium-priority` | 🔲 Ikke startet | ~71 nye | ~176 |
-| PR 3 | `feature/tools-low-priority` | 🔲 Ikke startet | ~15 nye | ~191 |
+| PR 2 | `feature/tools-medium-priority` | ✅ Ferdig — [PR #17](https://github.com/stephanteig/resolve-mcp-studio/pull/17) | 68 nye | 173 |
+| PR 3 | `feature/tools-low-priority` | 🔲 Ikke startet | ~15 nye | ~188 |
 
 **Eksisterende tools ved start:** 62  
 **Etter PR 1:** 105  
-**Mål:** ~191
+**Etter PR 2:** 173  
+**Mål:** ~188
 
 ---
 
@@ -108,123 +109,124 @@ Batch-pattern: optional `folder_name` (bin) eller `clip_name` (enkeltklipp).
 
 ---
 
-## 🔲 PR 2 — MEDIUM prioritet (~71 tools)
+## ✅ PR 2 — MEDIUM prioritet (ferdig)
 
-**Branch:** `feature/tools-medium-priority` (ikke startet)
+**Branch:** `feature/tools-medium-priority`  
+**PR:** [#17](https://github.com/stephanteig/resolve-mcp-studio/pull/17)
 
 ### Timeline (13)
 | Tool | API | Status |
 |---|---|---|
-| `set_timeline_name` | `Timeline.SetName(name)` | 🔲 |
-| `set_start_timecode` | `Timeline.SetStartTimecode(tc)` | 🔲 |
-| `get_start_timecode` | `Timeline.GetStartTimecode()` | 🔲 |
-| `set_track_enable` | `Timeline.SetTrackEnable(type, idx, bool)` | 🔲 |
-| `set_track_lock` | `Timeline.SetTrackLock(type, idx, bool)` | 🔲 |
-| `set_track_name` | `Timeline.SetTrackName(type, idx, name)` | 🔲 |
-| `delete_track` | `Timeline.DeleteTrack(type, idx)` | 🔲 |
-| `get_track_info` | `Timeline.GetTrackName/GetIsTrackEnabled/GetIsTrackLocked/GetTrackSubType` | 🔲 |
-| `insert_generator` | `Timeline.InsertGeneratorIntoTimeline(name)` | 🔲 |
-| `insert_title` | `Timeline.InsertTitleIntoTimeline(name)` | 🔲 |
-| `insert_ofx_generator` | `Timeline.InsertOFXGeneratorIntoTimeline(name)` | 🔲 |
-| `create_compound_clip` | `Timeline.CreateCompoundClip([items], {info})` | 🔲 |
-| `import_timeline_from_file` | `MediaPool.ImportTimelineFromFile(path, {options})` | 🔲 |
+| `set_timeline_name` | `Timeline.SetName(name)` | ✅ |
+| `set_start_timecode` | `Timeline.SetStartTimecode(tc)` | ✅ |
+| `get_start_timecode` | `Timeline.GetStartTimecode()` | ✅ |
+| `set_track_enable` | `Timeline.SetTrackEnable(type, idx, bool)` | ✅ |
+| `set_track_lock` | `Timeline.SetTrackLock(type, idx, bool)` | ✅ |
+| `set_track_name` | `Timeline.SetTrackName(type, idx, name)` | ✅ |
+| `delete_track` | `Timeline.DeleteTrack(type, idx)` | ✅ |
+| `get_track_info` | `Timeline.GetTrackName/GetIsTrackEnabled/GetIsTrackLocked/GetTrackSubType` | ✅ |
+| `insert_generator` | `Timeline.InsertGeneratorIntoTimeline(name)` | ✅ |
+| `insert_title` | `Timeline.InsertTitleIntoTimeline(name)` | ✅ |
+| `insert_ofx_generator` | `Timeline.InsertOFXGeneratorIntoTimeline(name)` | ✅ |
+| `create_compound_clip` | `Timeline.CreateCompoundClip([items], {info})` | ✅ |
+| `import_timeline_from_file` | `MediaPool.ImportTimelineFromFile(path, {options})` | ✅ |
 
 ### Timeline (fortsettelse, 8)
 | Tool | API | Status |
 |---|---|---|
-| `set_clips_linked` | `Timeline.SetClipsLinked([items], bool)` | 🔲 |
-| `get_current_video_item` | `Timeline.GetCurrentVideoItem()` | 🔲 |
-| `grab_all_stills` | `Timeline.GrabAllStills(stillFrameSource)` | 🔲 |
-| `set_mark_in_out` | `Timeline.SetMarkInOut(in, out, type)` | 🔲 |
-| `clear_mark_in_out` | `Timeline.ClearMarkInOut(type)` | 🔲 |
-| `get_timeline_node_graph` | `Timeline.GetNodeGraph()` | 🔲 |
-| `analyze_dolby_vision` | `Timeline.AnalyzeDolbyVision([items], type)` | 🔲 |
-| `set_start_timecode` | `Timeline.SetStartTimecode(tc)` | 🔲 |
+| `set_clips_linked` | `Timeline.SetClipsLinked([items], bool)` | ✅ |
+| `get_current_video_item` | `Timeline.GetCurrentVideoItem()` | ✅ |
+| `grab_all_stills` | `Timeline.GrabAllStills(stillFrameSource)` | ✅ |
+| `set_mark_in_out` | `Timeline.SetMarkInOut(in, out, type)` | ✅ |
+| `clear_mark_in_out` | `Timeline.ClearMarkInOut(type)` | ✅ |
+| `get_timeline_node_graph` | `Timeline.GetNodeGraph()` | ✅ |
+| `analyze_dolby_vision` | `Timeline.AnalyzeDolbyVision([items], type)` | ✅ |
+| `set_start_timecode` | `Timeline.SetStartTimecode(tc)` | ✅ |
 
 ### Timeline Item (10)
 | Tool | API | Status |
 |---|---|---|
-| `set_clip_name` | `TimelineItem.SetName(name)` | 🔲 |
-| `set_clip_enabled` | `TimelineItem.SetClipEnabled(bool)` | 🔲 |
-| `add_timeline_flags` | `TimelineItem.AddFlag(color)` / `GetFlagList()` | 🔲 |
-| `clear_timeline_flags` | `TimelineItem.ClearFlags(color)` | 🔲 |
-| `get_clip_positions` | `TimelineItem.GetStart/GetEnd/GetDuration/GetLeftOffset/GetRightOffset` | 🔲 |
-| `assign_color_group` | `TimelineItem.AssignToColorGroup(group)` | 🔲 |
-| `remove_from_color_group` | `TimelineItem.RemoveFromColorGroup()` | 🔲 |
-| `update_sidecar` | `TimelineItem.UpdateSidecar()` | 🔲 |
-| `get_linked_items` | `TimelineItem.GetLinkedItems()` | 🔲 |
-| `set_cache_mode` | `TimelineItem.SetColorOutputCache()` / `SetFusionOutputCache()` | 🔲 |
+| `set_clip_name` | `TimelineItem.SetName(name)` | ✅ |
+| `set_clip_enabled` | `TimelineItem.SetClipEnabled(bool)` | ✅ |
+| `add_timeline_flags` | `TimelineItem.AddFlag(color)` / `GetFlagList()` | ✅ |
+| `clear_timeline_flags` | `TimelineItem.ClearFlags(color)` | ✅ |
+| `get_clip_positions` | `TimelineItem.GetStart/GetEnd/GetDuration/GetLeftOffset/GetRightOffset` | ✅ |
+| `assign_color_group` | `TimelineItem.AssignToColorGroup(group)` | ✅ |
+| `remove_from_color_group` | `TimelineItem.RemoveFromColorGroup()` | ✅ |
+| `update_sidecar` | `TimelineItem.UpdateSidecar()` | ✅ |
+| `get_linked_items` | `TimelineItem.GetLinkedItems()` | ✅ |
+| `set_cache_mode` | `TimelineItem.SetColorOutputCache()` / `SetFusionOutputCache()` | ✅ |
 
 ### Media Pool (8)
 | Tool | API | Status |
 |---|---|---|
-| `delete_clips` | `MediaPool.DeleteClips([clips])` | 🔲 |
-| `delete_folders` | `MediaPool.DeleteFolders([folders])` | 🔲 |
-| `move_folders` | `MediaPool.MoveFolders([folders], target)` | 🔲 |
-| `export_metadata_csv` | `MediaPool.ExportMetadata(fileName, [clips])` | 🔲 |
-| `link_proxy_media` | `MediaPoolItem.LinkProxyMedia(path)` | 🔲 |
-| `unlink_proxy_media` | `MediaPoolItem.UnlinkProxyMedia()` | 🔲 |
-| `get_selected_clips` | `MediaPool.GetSelectedClips()` | 🔲 |
-| `clear_transcription` | `MediaPoolItem/Folder.ClearTranscription()` | 🔲 |
-| `clear_audio_classification` | `MediaPoolItem/Folder.ClearAudioClassification()` | 🔲 |
+| `delete_clips` | `MediaPool.DeleteClips([clips])` | ✅ |
+| `delete_folders` | `MediaPool.DeleteFolders([folders])` | ✅ |
+| `move_folders` | `MediaPool.MoveFolders([folders], target)` | ✅ |
+| `export_metadata_csv` | `MediaPool.ExportMetadata(fileName, [clips])` | ✅ |
+| `link_proxy_media` | `MediaPoolItem.LinkProxyMedia(path)` | ✅ |
+| `unlink_proxy_media` | `MediaPoolItem.UnlinkProxyMedia()` | ✅ |
+| `get_selected_clips` | `MediaPool.GetSelectedClips()` | ✅ |
+| `clear_transcription` | `MediaPoolItem/Folder.ClearTranscription()` | ✅ |
+| `clear_audio_classification` | `MediaPoolItem/Folder.ClearAudioClassification()` | ✅ |
 
 ### Gallery & Grading (9)
 | Tool | API | Status |
 |---|---|---|
-| `import_stills` | `GalleryStillAlbum.ImportStills([paths])` | 🔲 |
-| `delete_stills` | `GalleryStillAlbum.DeleteStills([stills])` | 🔲 |
-| `set_still_label` | `GalleryStillAlbum.SetLabel(still, label)` | 🔲 |
-| `get_color_groups` | `Project.GetColorGroupsList()` | 🔲 |
-| `add_color_group` | `Project.AddColorGroup(name)` | 🔲 |
-| `delete_color_group` | `Project.DeleteColorGroup(group)` | 🔲 |
-| `get_group_node_graph` | `ColorGroup.GetPreClipNodeGraph()` / `GetPostClipNodeGraph()` | 🔲 |
-| `get_color_versions` | `TimelineItem.GetVersionNameList(type)` | 🔲 |
-| `delete_color_version` | `TimelineItem.DeleteVersionByName(name, type)` | 🔲 |
+| `import_stills` | `GalleryStillAlbum.ImportStills([paths])` | ✅ |
+| `delete_stills` | `GalleryStillAlbum.DeleteStills([stills])` | ✅ |
+| `set_still_label` | `GalleryStillAlbum.SetLabel(still, label)` | ✅ |
+| `get_color_groups` | `Project.GetColorGroupsList()` | ✅ |
+| `add_color_group` | `Project.AddColorGroup(name)` | ✅ |
+| `delete_color_group` | `Project.DeleteColorGroup(group)` | ✅ |
+| `get_group_node_graph` | `ColorGroup.GetPreClipNodeGraph()` / `GetPostClipNodeGraph()` | ✅ |
+| `get_color_versions` | `TimelineItem.GetVersionNameList(type)` | ✅ |
+| `delete_color_version` | `TimelineItem.DeleteVersionByName(name, type)` | ✅ |
 
 ### Graph / Nodegraf (6)
 | Tool | API | Status |
 |---|---|---|
-| `get_node_info` | `Graph.GetNumNodes()` / `GetNodeLabel()` / `GetToolsInNode()` | 🔲 |
-| `get_lut_from_node` | `Graph.GetLUT(nodeIndex)` | 🔲 |
-| `set_node_cache_mode` | `Graph.SetNodeCacheMode(nodeIndex, value)` | 🔲 |
-| `apply_grade_from_drx` | `Graph.ApplyGradeFromDRX(path, gradeMode)` | 🔲 |
-| `apply_arri_cdl_lut` | `Graph.ApplyArriCdlLut()` | 🔲 |
-| `reset_all_grades` | `Graph.ResetAllGrades()` | 🔲 |
+| `get_node_info` | `Graph.GetNumNodes()` / `GetNodeLabel()` / `GetToolsInNode()` | ✅ |
+| `get_lut_from_node` | `Graph.GetLUT(nodeIndex)` | ✅ |
+| `set_node_cache_mode` | `Graph.SetNodeCacheMode(nodeIndex, value)` | ✅ |
+| `apply_grade_from_drx` | `Graph.ApplyGradeFromDRX(path, gradeMode)` | ✅ |
+| `apply_arri_cdl_lut` | `Graph.ApplyArriCdlLut()` | ✅ |
+| `reset_all_grades` | `Graph.ResetAllGrades()` | ✅ |
 
 ### Resolve-nivå (5)
 | Tool | API | Status |
 |---|---|---|
-| `manage_layout_presets` | `Resolve.LoadLayoutPreset()` / `SaveLayoutPreset()` / `ExportLayoutPreset()` | 🔲 |
-| `set_keyframe_mode` | `Resolve.SetKeyframeMode()` / `GetKeyframeMode()` | 🔲 |
-| `get_fairlight_presets` | `Resolve.GetFairlightPresets()` | 🔲 |
-| `reset_intellisearch` | `Project.ResetIntellisearchAnalysis()` | 🔲 |
-| `refresh_lut_list` | `Project.RefreshLUTList()` | 🔲 |
+| `manage_layout_presets` | `Resolve.LoadLayoutPreset()` / `SaveLayoutPreset()` / `ExportLayoutPreset()` | ✅ |
+| `set_keyframe_mode` | `Resolve.SetKeyframeMode()` / `GetKeyframeMode()` | ✅ |
+| `get_fairlight_presets` | `Resolve.GetFairlightPresets()` | ✅ |
+| `reset_intellisearch` | `Project.ResetIntellisearchAnalysis()` | ✅ |
+| `refresh_lut_list` | `Project.RefreshLUTList()` | ✅ |
 
 ### MediaPoolItem ekstra (6)
 | Tool | API | Status |
 |---|---|---|
-| `get_third_party_metadata` | `MediaPoolItem.GetThirdPartyMetadata(type)` | 🔲 |
-| `set_third_party_metadata` | `MediaPoolItem.SetThirdPartyMetadata(type, value)` | 🔲 |
-| `get_audio_mapping` | `MediaPoolItem.GetAudioMapping()` | 🔲 |
-| `set_clip_mark_in_out` | `MediaPoolItem.SetMarkInOut(in, out, type)` | 🔲 |
-| `monitor_growing_file` | `MediaPoolItem.MonitorGrowingFile()` | 🔲 |
-| `replace_clip_preserve_subclip` | `MediaPoolItem.ReplaceClipPreserveSubClip(path)` | 🔲 |
+| `get_third_party_metadata` | `MediaPoolItem.GetThirdPartyMetadata(type)` | ✅ |
+| `set_third_party_metadata` | `MediaPoolItem.SetThirdPartyMetadata(type, value)` | ✅ |
+| `get_audio_mapping` | `MediaPoolItem.GetAudioMapping()` | ✅ |
+| `set_clip_mark_in_out` | `MediaPoolItem.SetMarkInOut(in, out, type)` | ✅ |
+| `monitor_growing_file` | `MediaPoolItem.MonitorGrowingFile()` | ✅ |
+| `replace_clip_preserve_subclip` | `MediaPoolItem.ReplaceClipPreserveSubClip(path)` | ✅ |
 
 ### Takes (4)
 | Tool | API | Status |
 |---|---|---|
-| `add_take` | `TimelineItem.AddTake(item, startFrame, endFrame)` | 🔲 |
-| `select_take` | `TimelineItem.SelectTakeByIndex(idx)` | 🔲 |
-| `delete_take` | `TimelineItem.DeleteTakeByIndex(idx)` | 🔲 |
-| `finalize_take` | `TimelineItem.FinalizeTake()` | 🔲 |
+| `add_take` | `TimelineItem.AddTake(item, startFrame, endFrame)` | ✅ |
+| `select_take` | `TimelineItem.SelectTakeByIndex(idx)` | ✅ |
+| `delete_take` | `TimelineItem.DeleteTakeByIndex(idx)` | ✅ |
+| `finalize_take` | `TimelineItem.FinalizeTake()` | ✅ |
 
 ### Prosjekt/database (4)
 | Tool | API | Status |
 |---|---|---|
-| `close_project` | `ProjectManager.CloseProject(project)` | 🔲 |
-| `get_project_database_info` | `ProjectManager.GetCurrentDatabase()` / `GetDatabaseList()` | 🔲 |
-| `switch_database` | `ProjectManager.SetCurrentDatabase({dbInfo})` | 🔲 |
-| `import_project` | `ProjectManager.ImportProject(filePath, name)` | 🔲 |
+| `close_project` | `ProjectManager.CloseProject(project)` | ✅ |
+| `get_project_database_info` | `ProjectManager.GetCurrentDatabase()` / `GetDatabaseList()` | ✅ |
+| `switch_database` | `ProjectManager.SetCurrentDatabase({dbInfo})` | ✅ |
+| `import_project` | `ProjectManager.ImportProject(filePath, name)` | ✅ |
 
 ---
 
@@ -234,21 +236,21 @@ Batch-pattern: optional `folder_name` (bin) eller `clip_name` (enkeltklipp).
 
 | Tool | API | Status |
 |---|---|---|
-| `quit_resolve` | `Resolve.Quit()` | 🔲 |
-| `get_mounted_volumes` | `MediaStorage.GetMountedVolumeList()` | 🔲 |
-| `browse_media_storage` | `MediaStorage.GetFileList()` / `GetSubFolderList()` | 🔲 |
-| `reveal_in_storage` | `MediaStorage.RevealInStorage(path)` | 🔲 |
-| `import_burn_in_preset` | `Resolve.ImportBurnInPreset(path)` | 🔲 |
-| `export_burn_in_preset` | `Resolve.ExportBurnInPreset(name, path)` | 🔲 |
-| `create_stereo_clip` | `MediaPool.CreateStereoClip(left, right)` | 🔲 |
-| `convert_timeline_stereo` | `Timeline.ConvertTimelineToStereo()` | 🔲 |
-| `analyze_dolby_vision` | `Timeline.AnalyzeDolbyVision([items], type)` | 🔲 |
-| `cloud_project_management` | `ProjectManager.CreateCloudProject()` / `LoadCloudProject()` m.fl. | 🔲 |
-| `import_folder_from_file` | `MediaPool.ImportFolderFromFile(path, sourceClipsPath)` | 🔲 |
-| `get_render_resolutions` | `Project.GetRenderResolutions(format, codec)` | 🔲 |
-| `delete_render_preset` | `Project.DeleteRenderPreset(name)` | 🔲 |
-| `manage_clip_mattes` | `MediaPool.GetClipMatteList()` / `DeleteClipMattes()` | 🔲 |
-| `add_timeline_mattes` | `MediaStorage.AddTimelineMattesToMediaPool([paths])` | 🔲 |
+| `quit_resolve` | `Resolve.Quit()` | ✅ |
+| `get_mounted_volumes` | `MediaStorage.GetMountedVolumeList()` | ✅ |
+| `browse_media_storage` | `MediaStorage.GetFileList()` / `GetSubFolderList()` | ✅ |
+| `reveal_in_storage` | `MediaStorage.RevealInStorage(path)` | ✅ |
+| `import_burn_in_preset` | `Resolve.ImportBurnInPreset(path)` | ✅ |
+| `export_burn_in_preset` | `Resolve.ExportBurnInPreset(name, path)` | ✅ |
+| `create_stereo_clip` | `MediaPool.CreateStereoClip(left, right)` | ✅ |
+| `convert_timeline_stereo` | `Timeline.ConvertTimelineToStereo()` | ✅ |
+| `analyze_dolby_vision` | `Timeline.AnalyzeDolbyVision([items], type)` | ✅ |
+| `cloud_project_management` | `ProjectManager.CreateCloudProject()` / `LoadCloudProject()` m.fl. | ✅ |
+| `import_folder_from_file` | `MediaPool.ImportFolderFromFile(path, sourceClipsPath)` | ✅ |
+| `get_render_resolutions` | `Project.GetRenderResolutions(format, codec)` | ✅ |
+| `delete_render_preset` | `Project.DeleteRenderPreset(name)` | ✅ |
+| `manage_clip_mattes` | `MediaPool.GetClipMatteList()` / `DeleteClipMattes()` | ✅ |
+| `add_timeline_mattes` | `MediaStorage.AddTimelineMattesToMediaPool([paths])` | ✅ |
 
 ---
 
