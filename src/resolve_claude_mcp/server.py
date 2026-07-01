@@ -100,6 +100,61 @@ def _ok(result: Any, success_msg: str, fail_msg: str) -> str:
     return success_msg if result else fail_msg
 
 
+def _find_clip_in_media_pool(conn: ResolveConnection, clip_name: str):
+    """Recursively search Media Pool for a clip by name. Returns MediaPoolItem or None."""
+    def _search(folder):
+        for clip in (folder.GetClipList() or []):
+            try:
+                if clip.GetName() == clip_name:
+                    return clip
+            except Exception:
+                pass
+        for sub in (folder.GetSubFolderList() or []):
+            result = _search(sub)
+            if result:
+                return result
+        return None
+    root = conn.get_media_pool().GetRootFolder()
+    return _search(root)
+
+
+def _find_folder_in_media_pool(conn: ResolveConnection, folder_name: str):
+    """Recursively search Media Pool for a folder by name. Returns Folder or None."""
+    def _search(folder):
+        try:
+            if folder.GetName() == folder_name:
+                return folder
+        except Exception:
+            pass
+        for sub in (folder.GetSubFolderList() or []):
+            result = _search(sub)
+            if result:
+                return result
+        return None
+    root = conn.get_media_pool().GetRootFolder()
+    # Check root's subfolders (root itself usually has no user-facing name)
+    for sub in (root.GetSubFolderList() or []):
+        result = _search(sub)
+        if result:
+            return result
+    return None
+
+
+def _get_gallery_album(conn: ResolveConnection, album_name: str):
+    """Find a GalleryStillAlbum by name. Returns album or None."""
+    gallery = conn.get_resolve().GetProjectManager().GetCurrentProject().GetGallery()
+    if not gallery:
+        return None
+    albums = gallery.GetGalleryStillAlbums() or []
+    for album in albums:
+        try:
+            if gallery.GetAlbumName(album) == album_name:
+                return album
+        except Exception:
+            pass
+    return None
+
+
 # ── Lifespan ──
 
 @asynccontextmanager
@@ -2366,6 +2421,1333 @@ def editing_strategy() -> str:
     - Some features require the Color page. AI features require Resolve Studio 19+.
     - USE screenshot() LIBERALLY. It is your eyes. Look before you act, look after you act.
     """
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  PROJECT MANAGEMENT (HIGH PRIORITY)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def save_project() -> str:
+    """Save the current DaVinci Resolve project.
+
+    Should be called after significant changes. Equivalent to Ctrl+S in the UI.
+    """
+    try:
+        conn = _conn()
+        result = conn.get_project_manager().SaveProject()
+        return _ok(result, "Project saved successfully.", "Failed to save project.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def list_projects(folder_name: Optional[str] = None) -> str:
+    """List all projects in the current (or specified) Project Manager folder.
+
+    Parameters:
+    - folder_name: Optional folder name to navigate into before listing.
+      If omitted, lists projects in the current folder.
+    """
+    try:
+        conn = _conn()
+        pm = conn.get_project_manager()
+        if folder_name:
+            ok = pm.OpenFolder(folder_name)
+            if not ok:
+                return f"Failed to open folder '{folder_name}'."
+        projects = pm.GetProjectListInCurrentFolder() or []
+        folders = pm.GetFolderListInCurrentFolder() or []
+        current = pm.GetCurrentFolder()
+        return json.dumps({
+            "current_folder": current,
+            "project_count": len(projects),
+            "projects": projects,
+            "subfolders": folders,
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def load_project(project_name: str) -> str:
+    """Load a DaVinci Resolve project by name.
+
+    The project must exist in the current Project Manager folder.
+    Use list_projects() first to find available project names.
+
+    Parameters:
+    - project_name: Exact name of the project to load.
+    """
+    try:
+        conn = _conn()
+        pm = conn.get_project_manager()
+        project = pm.LoadProject(project_name)
+        if not project:
+            return f"Failed to load project '{project_name}'. Check the name with list_projects()."
+        return json.dumps({
+            "status": "loaded",
+            "project": project.GetName(),
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def export_project(
+    project_name: str,
+    export_path: str,
+    with_stills_and_luts: bool = True,
+) -> str:
+    """Export a DaVinci Resolve project to a .drp file.
+
+    Parameters:
+    - project_name: Name of the project to export (must exist in current folder).
+    - export_path: Full file path for the exported .drp file.
+    - with_stills_and_luts: Include gallery stills and LUTs in the export (default True).
+    """
+    try:
+        conn = _conn()
+        pm = conn.get_project_manager()
+        result = pm.ExportProject(project_name, export_path, with_stills_and_luts)
+        return _ok(result, f"Exported '{project_name}' to {export_path}", f"Failed to export '{project_name}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def archive_project(
+    project_name: str,
+    archive_path: str,
+    with_stills_and_luts: bool = True,
+    with_media: bool = False,
+    with_render_cache: bool = False,
+    with_proxy_media: bool = False,
+) -> str:
+    """Archive a DaVinci Resolve project to a .dra file with configurable media options.
+
+    Use this for long-term storage or client delivery. Larger than export_project()
+    when media is included.
+
+    Parameters:
+    - project_name: Name of the project to archive.
+    - archive_path: Full file path for the .dra archive.
+    - with_stills_and_luts: Include gallery stills and LUTs (default True).
+    - with_media: Include all source media files (default False — very large).
+    - with_render_cache: Include render cache (default False).
+    - with_proxy_media: Include proxy media files (default False).
+    """
+    try:
+        conn = _conn()
+        pm = conn.get_project_manager()
+        result = pm.ArchiveProject(
+            project_name,
+            archive_path,
+            with_stills_and_luts,
+            with_media,
+            with_render_cache,
+            with_proxy_media,
+        )
+        return _ok(result, f"Archived '{project_name}' to {archive_path}", f"Failed to archive '{project_name}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  TIMELINE NAVIGATION (HIGH PRIORITY)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_all_timelines() -> str:
+    """List all timelines in the current project with their index, name, and frame rate.
+
+    Use this to discover available timelines before calling switch_timeline().
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        count = project.GetTimelineCount()
+        current = conn.get_current_timeline()
+        current_name = current.GetName() if current else None
+        timelines = []
+        for i in range(1, count + 1):
+            tl = project.GetTimelineByIndex(i)
+            if tl:
+                try:
+                    fps = tl.GetSetting("timelineFrameRate") or ""
+                    timelines.append({
+                        "index": i,
+                        "name": tl.GetName(),
+                        "fps": fps,
+                        "is_active": tl.GetName() == current_name,
+                    })
+                except Exception:
+                    timelines.append({"index": i, "name": str(tl), "is_active": False})
+        return json.dumps({
+            "project": project.GetName(),
+            "timeline_count": count,
+            "active_timeline": current_name,
+            "timelines": timelines,
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def switch_timeline(name: Optional[str] = None, index: Optional[int] = None) -> str:
+    """Switch the active timeline by name or 1-based index.
+
+    Provide either name or index (name takes priority if both are given).
+    Use get_all_timelines() to see available timelines and their indices.
+
+    Parameters:
+    - name: Timeline name (exact match).
+    - index: 1-based timeline index.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        if name is None and index is None:
+            return "Error: provide 'name' or 'index'."
+        timeline = None
+        if name:
+            count = project.GetTimelineCount()
+            for i in range(1, count + 1):
+                tl = project.GetTimelineByIndex(i)
+                if tl and tl.GetName() == name:
+                    timeline = tl
+                    break
+            if not timeline:
+                return f"No timeline named '{name}'. Use get_all_timelines() to see available timelines."
+        else:
+            timeline = project.GetTimelineByIndex(index)
+            if not timeline:
+                return f"No timeline at index {index}."
+        result = project.SetCurrentTimeline(timeline)
+        return _ok(result, f"Switched to timeline '{timeline.GetName()}'.", f"Failed to switch timeline.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def duplicate_timeline(new_name: str) -> str:
+    """Duplicate the current timeline with a new name.
+
+    Useful for creating versioned copies before making destructive edits.
+
+    Parameters:
+    - new_name: Name for the duplicated timeline.
+    """
+    try:
+        conn = _conn()
+        timeline = _require_timeline(conn)
+        new_tl = timeline.DuplicateTimeline(new_name)
+        if not new_tl:
+            return f"Failed to duplicate timeline as '{new_name}'."
+        return json.dumps({
+            "status": "duplicated",
+            "source": timeline.GetName(),
+            "new_timeline": new_tl.GetName(),
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  TIMELINE EDITING (HIGH PRIORITY)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def add_timeline_track(
+    track_type: str,
+    sub_type: Optional[str] = None,
+) -> str:
+    """Add a new track to the current timeline.
+
+    Parameters:
+    - track_type: 'video', 'audio', or 'subtitle'.
+    - sub_type: Audio subtype — 'mono', 'stereo', '5.1', '5.1film', '7.1', '7.1film',
+      'adaptive1' through 'adaptive24'. Ignored for video/subtitle tracks.
+    """
+    try:
+        conn = _conn()
+        timeline = _require_timeline(conn)
+        if sub_type:
+            result = timeline.AddTrack(track_type, sub_type)
+        else:
+            result = timeline.AddTrack(track_type)
+        return _ok(result, f"Added {track_type} track{' (' + sub_type + ')' if sub_type else ''}.",
+                   f"Failed to add {track_type} track.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def delete_timeline_clips(
+    track_type: str,
+    track_index: int,
+    item_indices: List[int],
+    ripple: bool = False,
+) -> str:
+    """Delete clips from the current timeline by track and item index.
+
+    Parameters:
+    - track_type: 'video', 'audio', or 'subtitle'.
+    - track_index: 1-based track index.
+    - item_indices: List of 0-based item indices to delete.
+    - ripple: If True, close the gap left by deleted clips (ripple delete).
+    """
+    try:
+        conn = _conn()
+        timeline = _require_timeline(conn)
+        items = timeline.GetItemListInTrack(track_type, track_index)
+        if not items:
+            return f"No items on {track_type} track {track_index}."
+        to_delete = []
+        for idx in item_indices:
+            if 0 <= idx < len(items):
+                to_delete.append(items[idx])
+            else:
+                return f"item_index {idx} out of range — track has {len(items)} items (0-{len(items)-1})."
+        result = timeline.DeleteClips(to_delete, ripple)
+        return _ok(result, f"Deleted {len(to_delete)} clip(s) from {track_type} track {track_index}.",
+                   "Failed to delete clips.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def delete_timeline_markers(
+    color: Optional[str] = None,
+    frame: Optional[int] = None,
+) -> str:
+    """Delete markers from the current timeline by color or frame number.
+
+    Provide 'color' to delete all markers of that color, or 'frame' to delete
+    the marker at a specific frame. Provide neither to delete ALL markers (color='All').
+
+    Parameters:
+    - color: Marker color name (e.g. 'Blue', 'Red', 'All'). Case-sensitive.
+    - frame: Exact frame number of the marker to delete.
+    """
+    try:
+        conn = _conn()
+        timeline = _require_timeline(conn)
+        if frame is not None:
+            result = timeline.DeleteMarkerAtFrame(frame)
+            return _ok(result, f"Deleted marker at frame {frame}.", f"No marker at frame {frame}.")
+        target_color = color or "All"
+        result = timeline.DeleteMarkersByColor(target_color)
+        return _ok(result, f"Deleted all '{target_color}' markers.", f"Failed to delete markers.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  MEDIA POOL (HIGH PRIORITY)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def set_current_media_pool_folder(folder_name: str) -> str:
+    """Navigate to a bin in the Media Pool by name.
+
+    Sets the active bin for subsequent import operations. Searches all bins
+    recursively by name — use the exact bin name.
+
+    Parameters:
+    - folder_name: Exact bin name to navigate to.
+    """
+    try:
+        conn = _conn()
+        folder = _find_folder_in_media_pool(conn, folder_name)
+        if not folder:
+            return f"Bin '{folder_name}' not found. Use get_media_pool_structure() to see available bins."
+        result = conn.get_media_pool().SetCurrentFolder(folder)
+        return _ok(result, f"Navigated to bin '{folder_name}'.", f"Failed to set bin '{folder_name}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def move_clips_to_folder(clip_names: List[str], target_folder_name: str) -> str:
+    """Move clips to a different bin in the Media Pool.
+
+    Parameters:
+    - clip_names: List of exact clip names to move.
+    - target_folder_name: Exact name of the destination bin.
+    """
+    try:
+        conn = _conn()
+        target = _find_folder_in_media_pool(conn, target_folder_name)
+        if not target:
+            return f"Target bin '{target_folder_name}' not found."
+        clips = []
+        not_found = []
+        for name in clip_names:
+            clip = _find_clip_in_media_pool(conn, name)
+            if clip:
+                clips.append(clip)
+            else:
+                not_found.append(name)
+        if not clips:
+            return f"None of the specified clips were found: {clip_names}"
+        result = conn.get_media_pool().MoveClips(clips, target)
+        return json.dumps({
+            "status": "ok" if result else "failed",
+            "moved": len(clips),
+            "not_found": not_found,
+            "target_folder": target_folder_name,
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def relink_clips(clip_names: List[str], folder_path: str) -> str:
+    """Relink offline clips to media files in a new folder.
+
+    Resolves 'media offline' for clips whose files have moved. Resolve matches
+    files by name within the given folder.
+
+    Parameters:
+    - clip_names: List of exact clip names to relink.
+    - folder_path: Absolute path to the folder containing the new media files.
+    """
+    try:
+        conn = _conn()
+        clips = []
+        not_found = []
+        for name in clip_names:
+            clip = _find_clip_in_media_pool(conn, name)
+            if clip:
+                clips.append(clip)
+            else:
+                not_found.append(name)
+        if not clips:
+            return f"None of the specified clips were found: {clip_names}"
+        result = conn.get_media_pool().RelinkClips(clips, folder_path)
+        return json.dumps({
+            "status": "ok" if result else "failed",
+            "relinked": len(clips),
+            "not_found": not_found,
+            "folder": folder_path,
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def auto_sync_audio(
+    clip_names: List[str],
+    method: str = "waveform",
+    timecode_mismatch_threshold: int = 0,
+) -> str:
+    """Auto-sync audio for multi-cam or double-system sound recordings.
+
+    Parameters:
+    - clip_names: List of clip names to sync (must be in Media Pool).
+    - method: Sync method — 'waveform' (default) or 'timecode'.
+    - timecode_mismatch_threshold: Threshold in frames for timecode method (default 0).
+    """
+    try:
+        conn = _conn()
+        clips = []
+        not_found = []
+        for name in clip_names:
+            clip = _find_clip_in_media_pool(conn, name)
+            if clip:
+                clips.append(clip)
+            else:
+                not_found.append(name)
+        if not clips:
+            return f"None of the specified clips were found: {clip_names}"
+        settings = {
+            "audioSyncMethod": method,
+            "timecodeOffsetInFrames": timecode_mismatch_threshold,
+        }
+        result = conn.get_media_pool().AutoSyncAudio(clips, settings)
+        return json.dumps({
+            "status": "ok" if result else "failed",
+            "clip_count": len(clips),
+            "not_found": not_found,
+            "method": method,
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def get_clip_metadata(clip_name: str, metadata_type: Optional[str] = None) -> str:
+    """Read metadata from a Media Pool clip.
+
+    Parameters:
+    - clip_name: Exact clip name in the Media Pool.
+    - metadata_type: Specific metadata key to read (e.g. 'Camera #', 'Scene', 'Shot').
+      If omitted, returns all metadata as a dict.
+    """
+    try:
+        conn = _conn()
+        clip = _find_clip_in_media_pool(conn, clip_name)
+        if not clip:
+            return f"Clip '{clip_name}' not found in Media Pool."
+        if metadata_type:
+            value = clip.GetMetadata(metadata_type)
+            return json.dumps({"clip": clip_name, metadata_type: value}, indent=2)
+        metadata = clip.GetMetadata()
+        return json.dumps({"clip": clip_name, "metadata": metadata}, indent=2, default=str)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def set_clip_metadata(clip_name: str, metadata: Dict[str, str]) -> str:
+    """Write metadata to a Media Pool clip.
+
+    Parameters:
+    - clip_name: Exact clip name in the Media Pool.
+    - metadata: Dict of metadata key-value pairs (e.g. {'Scene': '01A', 'Shot': '02'}).
+      Common keys: 'Camera #', 'Scene', 'Shot', 'Take', 'Angle', 'Description',
+      'Comments', 'Keywords', 'Good Take', 'Frame Rate'.
+    """
+    try:
+        conn = _conn()
+        clip = _find_clip_in_media_pool(conn, clip_name)
+        if not clip:
+            return f"Clip '{clip_name}' not found in Media Pool."
+        result = clip.SetMetadata(metadata)
+        return _ok(result, f"Metadata set on '{clip_name}'.", f"Failed to set metadata on '{clip_name}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def add_clip_markers(
+    clip_name: str,
+    markers: List[Dict[str, Any]],
+) -> str:
+    """Add markers directly to a Media Pool clip (not timeline markers).
+
+    Each marker dict must have 'frame' and optionally 'color', 'name', 'note',
+    'duration', 'custom_data'.
+
+    Parameters:
+    - clip_name: Exact clip name in the Media Pool.
+    - markers: List of marker dicts. Example:
+      [{'frame': 0, 'color': 'Blue', 'name': 'Start', 'note': '', 'duration': 1}]
+    """
+    try:
+        conn = _conn()
+        clip = _find_clip_in_media_pool(conn, clip_name)
+        if not clip:
+            return f"Clip '{clip_name}' not found in Media Pool."
+        added = 0
+        failures = []
+        for m in markers:
+            frame = m.get("frame", 0)
+            color = m.get("color", "Blue")
+            name = m.get("name", "")
+            note = m.get("note", "")
+            duration = m.get("duration", 1)
+            custom_data = m.get("custom_data", "")
+            result = clip.AddMarker(frame, color, name, note, duration, custom_data)
+            if result:
+                added += 1
+            else:
+                failures.append(frame)
+        return json.dumps({
+            "clip": clip_name,
+            "added": added,
+            "failed_frames": failures,
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def replace_clip(clip_name: str, new_file_path: str) -> str:
+    """Replace the media file for an existing Media Pool clip (offline→online workflow).
+
+    The clip retains its position in the Media Pool and on timelines.
+
+    Parameters:
+    - clip_name: Exact clip name in the Media Pool.
+    - new_file_path: Absolute path to the replacement media file.
+    """
+    try:
+        conn = _conn()
+        clip = _find_clip_in_media_pool(conn, clip_name)
+        if not clip:
+            return f"Clip '{clip_name}' not found in Media Pool."
+        result = clip.ReplaceClip(new_file_path)
+        return _ok(result, f"Replaced '{clip_name}' with {new_file_path}",
+                   f"Failed to replace '{clip_name}'. Check the file path.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def create_timeline_from_clips(timeline_name: str, clip_names: List[str]) -> str:
+    """Create a new timeline directly from a list of Media Pool clips.
+
+    Faster than create_timeline() + append_to_timeline() separately.
+
+    Parameters:
+    - timeline_name: Name for the new timeline.
+    - clip_names: Ordered list of clip names from the Media Pool to include.
+    """
+    try:
+        conn = _conn()
+        clips = []
+        not_found = []
+        for name in clip_names:
+            clip = _find_clip_in_media_pool(conn, name)
+            if clip:
+                clips.append(clip)
+            else:
+                not_found.append(name)
+        if not clips:
+            return f"None of the specified clips were found: {clip_names}"
+        new_tl = conn.get_media_pool().CreateTimelineFromClips(timeline_name, clips)
+        if not new_tl:
+            return f"Failed to create timeline '{timeline_name}'."
+        return json.dumps({
+            "status": "created",
+            "timeline": new_tl.GetName(),
+            "clips_added": len(clips),
+            "not_found": not_found,
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  RENDER (HIGH PRIORITY)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def render_with_quick_export(
+    preset_name: str,
+    output_path: Optional[str] = None,
+) -> str:
+    """Render the current timeline using a Quick Export preset.
+
+    Simpler than the full render queue — no need to configure format/codec separately.
+    Use get_render_formats() to browse standard presets, or check Resolve's
+    Deliver > Quick Export panel for preset names.
+
+    Parameters:
+    - preset_name: Name of the Quick Export preset (e.g. 'H.264', 'YouTube').
+    - output_path: Optional output file path. If omitted, uses the preset's default.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        params: Dict[str, Any] = {}
+        if output_path:
+            params["TargetDir"] = os.path.dirname(output_path)
+            params["CustomName"] = os.path.basename(output_path)
+        result = project.RenderWithQuickExport(preset_name, params)
+        if result:
+            return json.dumps({"status": "rendering_started", "preset": preset_name}, indent=2)
+        return f"Failed to start Quick Export with preset '{preset_name}'."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def save_render_preset(preset_name: str) -> str:
+    """Save the current render settings as a new named preset.
+
+    Call this after configuring render settings with set_render_settings().
+
+    Parameters:
+    - preset_name: Name for the new render preset.
+    """
+    try:
+        conn = _conn()
+        result = conn.get_project().SaveAsNewRenderPreset(preset_name)
+        return _ok(result, f"Render preset '{preset_name}' saved.", f"Failed to save render preset '{preset_name}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def delete_render_job(job_id: Optional[str] = None, delete_all: bool = False) -> str:
+    """Delete one or all render jobs from the queue.
+
+    Parameters:
+    - job_id: ID of a specific job to delete. Use get_render_settings() to see job IDs.
+    - delete_all: If True, deletes all jobs in the queue (ignores job_id).
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        if delete_all:
+            result = project.DeleteAllRenderJobs()
+            return _ok(result, "Deleted all render jobs.", "Failed to delete render jobs.")
+        if not job_id:
+            return "Error: provide 'job_id' or set 'delete_all=True'."
+        result = project.DeleteRenderJob(job_id)
+        return _ok(result, f"Deleted render job '{job_id}'.", f"Failed to delete job '{job_id}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  GRADING & GALLERY (HIGH PRIORITY)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def grab_still() -> str:
+    """Grab a still from the current clip in the Color page and add it to the Gallery.
+
+    Must be on the Color page with a clip selected. Returns the still reference.
+    Use export_gallery_stills() to save stills to disk.
+    """
+    try:
+        conn = _conn()
+        timeline = _require_timeline(conn)
+        still = timeline.GrabStill()
+        if not still:
+            return "Failed to grab still. Make sure you are on the Color page with a clip selected."
+        return json.dumps({"status": "grabbed", "timeline": timeline.GetName()}, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def export_gallery_stills(
+    folder_path: str,
+    album_name: Optional[str] = None,
+    file_format: str = "png",
+    prefix: str = "",
+) -> str:
+    """Export gallery stills to a folder on disk.
+
+    Parameters:
+    - folder_path: Absolute path to the output folder.
+    - album_name: Name of the still album to export from. If omitted, uses the current album.
+    - file_format: Output format — 'dpx', 'cin', 'tif', 'jpg', 'png' (default), 'ppm', 'bmp', 'xpm', 'drx'.
+    - prefix: Optional filename prefix for exported files.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        gallery = project.GetGallery()
+        if not gallery:
+            return "Gallery not available."
+        if album_name:
+            album = _get_gallery_album(conn, album_name)
+            if not album:
+                return f"Album '{album_name}' not found."
+        else:
+            album = gallery.GetCurrentStillAlbum()
+        if not album:
+            return "No album available. Grab a still first with grab_still()."
+        stills = album.GetStills() or []
+        if not stills:
+            return "No stills in the album."
+        result = album.ExportStills(stills, folder_path, prefix, file_format)
+        return _ok(result, f"Exported {len(stills)} still(s) to {folder_path}",
+                   f"Failed to export stills.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def export_lut(
+    export_type: str,
+    output_path: str,
+    track_type: str = "video",
+    track_index: int = 1,
+    item_index: int = 0,
+) -> str:
+    """Export the color grade as a LUT file from a timeline clip.
+
+    Must be on the Color page.
+
+    Parameters:
+    - export_type: LUT size/type — '17PointCube', '33PointCube', '65PointCube', 'PanasonicVlut'.
+    - output_path: Absolute file path for the exported LUT (e.g. '/path/to/grade.cube').
+    - track_type: 'video' (default), 'audio', or 'subtitle'.
+    - track_index: 1-based track index (default 1).
+    - item_index: 0-based item index (default 0).
+    """
+    try:
+        item = _get_timeline_item(track_type, track_index, item_index)
+        result = item.ExportLUT(export_type, output_path)
+        return _ok(result, f"LUT exported to {output_path}", f"Failed to export LUT.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def copy_grades(
+    source_track_index: int,
+    source_item_index: int,
+    target_item_indices: List[Dict[str, int]],
+    track_type: str = "video",
+) -> str:
+    """Copy the color grade from one clip to other clips on the timeline.
+
+    Must be on the Color page.
+
+    Parameters:
+    - source_track_index: 1-based track index of the source clip.
+    - source_item_index: 0-based item index of the source clip.
+    - target_item_indices: List of dicts with 'track_index' and 'item_index' for targets.
+      Example: [{'track_index': 1, 'item_index': 2}, {'track_index': 1, 'item_index': 3}]
+    - track_type: Track type for source and targets (default 'video').
+    """
+    try:
+        conn = _conn()
+        timeline = _require_timeline(conn)
+        source = _get_timeline_item(track_type, source_track_index, source_item_index)
+        targets = []
+        for t in target_item_indices:
+            item = _get_timeline_item(track_type, t.get("track_index", 1), t.get("item_index", 0))
+            targets.append(item)
+        if not targets:
+            return "No valid target clips found."
+        result = source.CopyGrades(targets)
+        return _ok(result, f"Copied grade to {len(targets)} clip(s).", "Failed to copy grades.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def set_node_enabled(
+    node_index: int,
+    enabled: bool,
+    track_type: str = "video",
+    track_index: int = 1,
+    item_index: int = 0,
+) -> str:
+    """Enable or disable (bypass) a color correction node on a timeline clip.
+
+    Must be on the Color page.
+
+    Parameters:
+    - node_index: 1-based node index.
+    - enabled: True to enable the node, False to bypass/disable it.
+    - track_type: 'video' (default), 'audio', or 'subtitle'.
+    - track_index: 1-based track index (default 1).
+    - item_index: 0-based item index (default 0).
+    """
+    try:
+        item = _get_timeline_item(track_type, track_index, item_index)
+        graph = item.GetNodeGraph()
+        if not graph:
+            return "No node graph available. Make sure you are on the Color page."
+        result = graph.SetNodeEnabled(node_index, enabled)
+        state = "enabled" if enabled else "disabled"
+        return _ok(result, f"Node {node_index} {state}.", f"Failed to {state} node {node_index}.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def add_color_version(
+    version_name: str,
+    version_type: int = 0,
+    track_type: str = "video",
+    track_index: int = 1,
+    item_index: int = 0,
+) -> str:
+    """Add a new color version to a timeline clip.
+
+    Color versions let you maintain multiple independent grades for one clip.
+
+    Parameters:
+    - version_name: Name for the new version.
+    - version_type: 0 = Local version (default), 1 = Remote version.
+    - track_type: 'video' (default).
+    - track_index: 1-based track index (default 1).
+    - item_index: 0-based item index (default 0).
+    """
+    try:
+        item = _get_timeline_item(track_type, track_index, item_index)
+        result = item.AddVersion(version_name, version_type)
+        return _ok(result, f"Added color version '{version_name}'.", f"Failed to add version '{version_name}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def load_color_version(
+    version_name: str,
+    version_type: int = 0,
+    track_type: str = "video",
+    track_index: int = 1,
+    item_index: int = 0,
+) -> str:
+    """Load (activate) a named color version on a timeline clip.
+
+    Use get_color_versions() to list available versions.
+
+    Parameters:
+    - version_name: Exact name of the version to activate.
+    - version_type: 0 = Local (default), 1 = Remote.
+    - track_type: 'video' (default).
+    - track_index: 1-based track index (default 1).
+    - item_index: 0-based item index (default 0).
+    """
+    try:
+        item = _get_timeline_item(track_type, track_index, item_index)
+        result = item.LoadVersionByName(version_name, version_type)
+        return _ok(result, f"Loaded color version '{version_name}'.", f"Version '{version_name}' not found.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  v21 AI TOOLS (HIGH PRIORITY)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def generate_speech(
+    text: str,
+    timecode: str,
+    voice: str = "Female 1",
+    language: str = "English (United States)",
+) -> str:
+    """Generate AI speech (text-to-voice) and insert it into the current timeline.
+
+    Requires the AI Speech Generator Extra in DaVinci Resolve Studio v21+.
+    Maximum 350 characters per call.
+
+    Parameters:
+    - text: The text to speak (max 350 characters).
+    - timecode: Timeline position to insert the audio (HH:MM:SS:FF format).
+    - voice: Voice to use — 'Female 1' (default), 'Male 1', or 'Custom Voice'.
+    - language: Language/accent string (default 'English (United States)').
+    """
+    try:
+        if len(text) > 350:
+            return f"Error: text exceeds 350 character limit ({len(text)} characters)."
+        conn = _conn()
+        project = conn.get_project()
+        settings = {
+            "text": text,
+            "voice": voice,
+            "language": language,
+        }
+        result = project.GenerateSpeech(settings, timecode)
+        return _ok(result, f"Speech generated and inserted at {timecode}.",
+                   "Failed to generate speech. Check that AI Speech Generator Extra is installed.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def analyze_for_intellisearch(
+    folder_name: Optional[str] = None,
+    clip_name: Optional[str] = None,
+    identify_faces: bool = False,
+    better_mode: bool = False,
+) -> str:
+    """Run IntelliSearch AI analysis on a clip or an entire Media Pool bin.
+
+    Requires AI IntelliSearch Extra in DaVinci Resolve Studio v21+.
+    Provide either folder_name (batch) or clip_name (single clip).
+
+    Parameters:
+    - folder_name: Name of a Media Pool bin to analyze (batch mode).
+    - clip_name: Name of a single clip to analyze.
+    - identify_faces: Enable face detection/recognition (default False).
+    - better_mode: Use higher-quality (slower) analysis mode (default False).
+    """
+    try:
+        conn = _conn()
+        if folder_name:
+            folder = _find_folder_in_media_pool(conn, folder_name)
+            if not folder:
+                return f"Bin '{folder_name}' not found."
+            result = folder.AnalyzeForIntellisearch(identify_faces, better_mode)
+            return _ok(result, f"IntelliSearch analysis started for bin '{folder_name}'.",
+                       f"Failed to analyze bin '{folder_name}'.")
+        if clip_name:
+            clip = _find_clip_in_media_pool(conn, clip_name)
+            if not clip:
+                return f"Clip '{clip_name}' not found."
+            result = clip.AnalyzeForIntellisearch(identify_faces, better_mode)
+            return _ok(result, f"IntelliSearch analysis started for '{clip_name}'.",
+                       f"Failed to analyze '{clip_name}'.")
+        return "Error: provide 'folder_name' or 'clip_name'."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def remove_motion_blur(
+    folder_name: Optional[str] = None,
+    clip_name: Optional[str] = None,
+) -> str:
+    """Remove motion blur from a clip or all clips in a Media Pool bin using AI.
+
+    Requires DaVinci Resolve Studio v21+. Creates new de-blurred clips in the Media Pool.
+    Provide either folder_name (batch) or clip_name (single clip).
+
+    Parameters:
+    - folder_name: Name of a Media Pool bin to process (batch mode).
+    - clip_name: Name of a single clip to process.
+    """
+    try:
+        conn = _conn()
+        deblur_option = {"outputSuffix": "_deblurred"}
+        if folder_name:
+            folder = _find_folder_in_media_pool(conn, folder_name)
+            if not folder:
+                return f"Bin '{folder_name}' not found."
+            result = folder.RemoveMotionBlur(deblur_option)
+            if result:
+                return json.dumps({"status": "started", "folder": folder_name,
+                                   "note": "New de-blurred clips will appear in the Media Pool."}, indent=2)
+            return f"Failed to start motion blur removal for bin '{folder_name}'."
+        if clip_name:
+            clip = _find_clip_in_media_pool(conn, clip_name)
+            if not clip:
+                return f"Clip '{clip_name}' not found."
+            result = clip.RemoveMotionBlur(deblur_option)
+            if result:
+                return json.dumps({"status": "started", "clip": clip_name,
+                                   "note": "A new de-blurred clip will appear in the Media Pool."}, indent=2)
+            return f"Failed to start motion blur removal for '{clip_name}'."
+        return "Error: provide 'folder_name' or 'clip_name'."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def analyze_for_slate(
+    folder_name: Optional[str] = None,
+    clip_name: Optional[str] = None,
+    marker_color: str = "Blue",
+) -> str:
+    """Run AI Slate ID analysis to automatically identify slate/clapperboard info.
+
+    Requires AI Slate ID Extra in DaVinci Resolve Studio v21+.
+    Provide either folder_name (batch) or clip_name (single clip).
+
+    Parameters:
+    - folder_name: Name of a Media Pool bin to analyze (batch mode).
+    - clip_name: Name of a single clip to analyze.
+    - marker_color: Color for the slate marker (default 'Blue').
+    """
+    try:
+        conn = _conn()
+        if folder_name:
+            folder = _find_folder_in_media_pool(conn, folder_name)
+            if not folder:
+                return f"Bin '{folder_name}' not found."
+            result = folder.AnalyzeForSlate(marker_color)
+            return _ok(result, f"Slate analysis started for bin '{folder_name}'.",
+                       f"Failed to analyze bin '{folder_name}'.")
+        if clip_name:
+            clip = _find_clip_in_media_pool(conn, clip_name)
+            if not clip:
+                return f"Clip '{clip_name}' not found."
+            result = clip.AnalyzeForSlate(marker_color)
+            return _ok(result, f"Slate analysis started for '{clip_name}'.",
+                       f"Failed to analyze '{clip_name}'.")
+        return "Error: provide 'folder_name' or 'clip_name'."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def perform_audio_classification(
+    folder_name: Optional[str] = None,
+    clip_name: Optional[str] = None,
+) -> str:
+    """Classify audio content (speech, music, ambience, etc.) using AI.
+
+    Requires AI Extra in DaVinci Resolve Studio v21+.
+    Provide either folder_name (batch) or clip_name (single clip).
+
+    Parameters:
+    - folder_name: Name of a Media Pool bin to classify (batch mode).
+    - clip_name: Name of a single clip to classify.
+    """
+    try:
+        conn = _conn()
+        if folder_name:
+            folder = _find_folder_in_media_pool(conn, folder_name)
+            if not folder:
+                return f"Bin '{folder_name}' not found."
+            result = folder.PerformAudioClassification()
+            return _ok(result, f"Audio classification started for bin '{folder_name}'.",
+                       f"Failed to classify audio in bin '{folder_name}'.")
+        if clip_name:
+            clip = _find_clip_in_media_pool(conn, clip_name)
+            if not clip:
+                return f"Clip '{clip_name}' not found."
+            result = clip.PerformAudioClassification()
+            return _ok(result, f"Audio classification started for '{clip_name}'.",
+                       f"Failed to classify audio in '{clip_name}'.")
+        return "Error: provide 'folder_name' or 'clip_name'."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def transcribe_clip_audio(
+    folder_name: Optional[str] = None,
+    clip_name: Optional[str] = None,
+    use_speaker_detection: bool = False,
+) -> str:
+    """Transcribe audio using Resolve's built-in AI (not mlx-whisper).
+
+    Requires DaVinci Resolve Studio v21+. Results appear in the clip's
+    transcript metadata, accessible via the Transcription panel.
+    Provide either folder_name (batch) or clip_name (single clip).
+
+    Parameters:
+    - folder_name: Name of a Media Pool bin to transcribe (batch mode).
+    - clip_name: Name of a single clip to transcribe.
+    - use_speaker_detection: Detect and label different speakers (default False).
+    """
+    try:
+        conn = _conn()
+        if folder_name:
+            folder = _find_folder_in_media_pool(conn, folder_name)
+            if not folder:
+                return f"Bin '{folder_name}' not found."
+            result = folder.TranscribeAudio(use_speaker_detection)
+            return _ok(result, f"Transcription started for bin '{folder_name}'.",
+                       f"Failed to transcribe bin '{folder_name}'.")
+        if clip_name:
+            clip = _find_clip_in_media_pool(conn, clip_name)
+            if not clip:
+                return f"Clip '{clip_name}' not found."
+            result = clip.TranscribeAudio(use_speaker_detection)
+            return _ok(result, f"Transcription started for '{clip_name}'.",
+                       f"Failed to transcribe '{clip_name}'.")
+        return "Error: provide 'folder_name' or 'clip_name'."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def apply_fairlight_preset(preset_name: str) -> str:
+    """Apply a saved Fairlight audio preset to the current timeline.
+
+    Requires DaVinci Resolve Studio v21+. Use get_fairlight_presets() (coming soon)
+    to list available presets.
+
+    Parameters:
+    - preset_name: Exact name of the Fairlight preset to apply.
+    """
+    try:
+        conn = _conn()
+        result = conn.get_project().ApplyFairlightPresetToCurrentTimeline(preset_name)
+        return _ok(result, f"Applied Fairlight preset '{preset_name}'.",
+                   f"Failed to apply Fairlight preset '{preset_name}'.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def disable_background_tasks() -> str:
+    """Disable all background AI tasks for the current Resolve session.
+
+    Useful before running scripts that modify clips or the timeline, to prevent
+    AI analysis tasks (IntelliSearch, Audio Classification, etc.) from interfering.
+    Requires DaVinci Resolve Studio v21+.
+
+    Note: Background tasks resume when Resolve is restarted.
+    """
+    try:
+        conn = _conn()
+        result = conn.get_resolve().DisableBackgroundTasksForCurrentResolveSession()
+        return _ok(result, "Background tasks disabled for this session.",
+                   "Failed to disable background tasks.")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  PHOTO PAGE (HIGH PRIORITY)
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def open_photo_page() -> str:
+    """Navigate to the Photo page in DaVinci Resolve (v21+).
+
+    The Photo page is designed for still photo editing and grading.
+    Note: open_page('photo') also works if you prefer the generic tool.
+    """
+    try:
+        conn = _conn()
+        result = conn.get_resolve().OpenPage("photo")
+        return _ok(result, "Opened Photo page.", "Failed to open Photo page (requires Resolve v21+).")
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def create_photo_album(album_name: str, album_type: str = "still") -> str:
+    """Create a new Gallery album for stills or PowerGrades.
+
+    Parameters:
+    - album_name: Name for the new album.
+    - album_type: 'still' (default) for a still album, 'powergrade' for a PowerGrade album.
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        gallery = project.GetGallery()
+        if not gallery:
+            return "Gallery not available."
+        if album_type == "powergrade":
+            album = gallery.CreateGalleryPowerGradeAlbum()
+        else:
+            album = gallery.CreateGalleryStillAlbum()
+        if not album:
+            return f"Failed to create {album_type} album."
+        if album_name:
+            gallery.SetAlbumName(album, album_name)
+        return json.dumps({"status": "created", "album": album_name, "type": album_type}, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def manage_photo_albums(
+    action: str = "list",
+    album_name: Optional[str] = None,
+    new_name: Optional[str] = None,
+) -> str:
+    """List, rename, or navigate Gallery still albums.
+
+    Parameters:
+    - action: 'list' (default) — list all albums; 'rename' — rename an album;
+      'set_current' — make an album active.
+    - album_name: Album name (required for 'rename' and 'set_current').
+    - new_name: New name for the album (required for 'rename').
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        gallery = project.GetGallery()
+        if not gallery:
+            return "Gallery not available."
+        if action == "list":
+            albums = gallery.GetGalleryStillAlbums() or []
+            current = gallery.GetCurrentStillAlbum()
+            current_name = gallery.GetAlbumName(current) if current else None
+            result = []
+            for a in albums:
+                try:
+                    name = gallery.GetAlbumName(a)
+                    stills = a.GetStills() or []
+                    result.append({"name": name, "still_count": len(stills),
+                                   "is_current": name == current_name})
+                except Exception:
+                    pass
+            return json.dumps({"albums": result, "current": current_name}, indent=2)
+        if action == "rename":
+            if not album_name or not new_name:
+                return "Error: 'album_name' and 'new_name' required for rename."
+            album = _get_gallery_album(conn, album_name)
+            if not album:
+                return f"Album '{album_name}' not found."
+            result = gallery.SetAlbumName(album, new_name)
+            return _ok(result, f"Renamed album '{album_name}' to '{new_name}'.",
+                       f"Failed to rename album.")
+        if action == "set_current":
+            if not album_name:
+                return "Error: 'album_name' required for set_current."
+            album = _get_gallery_album(conn, album_name)
+            if not album:
+                return f"Album '{album_name}' not found."
+            result = gallery.SetCurrentStillAlbum(album)
+            return _ok(result, f"Set '{album_name}' as current album.", "Failed to set current album.")
+        return f"Unknown action '{action}'. Use 'list', 'rename', or 'set_current'."
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def export_graded_stills(
+    folder_path: str,
+    album_name: Optional[str] = None,
+    file_format: str = "png",
+    prefix: str = "",
+) -> str:
+    """Export graded stills from a Gallery album to a folder on disk.
+
+    Alias for export_gallery_stills() with Photo Page context in mind.
+
+    Parameters:
+    - folder_path: Absolute path to the output folder.
+    - album_name: Gallery album name. If omitted, uses the current album.
+    - file_format: Output format — 'png' (default), 'jpg', 'tif', 'dpx', 'drx'.
+    - prefix: Optional filename prefix.
+    """
+    return export_gallery_stills(
+        folder_path=folder_path,
+        album_name=album_name,
+        file_format=file_format,
+        prefix=prefix,
+    )
+
+
+@mcp.tool()
+def manage_gallery_stills(
+    action: str = "list",
+    album_name: Optional[str] = None,
+    still_label: Optional[str] = None,
+    still_index: Optional[int] = None,
+) -> str:
+    """List, label, or delete stills in a Gallery album.
+
+    Parameters:
+    - action: 'list' — list stills with labels; 'set_label' — set label on a still;
+      'delete' — delete a still by index.
+    - album_name: Album name. If omitted, uses the current album.
+    - still_label: New label text (required for 'set_label').
+    - still_index: 0-based still index (required for 'set_label' and 'delete').
+    """
+    try:
+        conn = _conn()
+        project = conn.get_project()
+        gallery = project.GetGallery()
+        if not gallery:
+            return "Gallery not available."
+        if album_name:
+            album = _get_gallery_album(conn, album_name)
+            if not album:
+                return f"Album '{album_name}' not found."
+        else:
+            album = gallery.GetCurrentStillAlbum()
+        if not album:
+            return "No album available."
+        stills = album.GetStills() or []
+        if action == "list":
+            result = []
+            for i, s in enumerate(stills):
+                try:
+                    label = album.GetLabel(s)
+                    result.append({"index": i, "label": label})
+                except Exception:
+                    result.append({"index": i, "label": None})
+            return json.dumps({"still_count": len(stills), "stills": result}, indent=2)
+        if still_index is None or still_index < 0 or still_index >= len(stills):
+            return f"still_index {still_index} out of range — album has {len(stills)} stills."
+        still = stills[still_index]
+        if action == "set_label":
+            if not still_label:
+                return "Error: 'still_label' required for set_label."
+            result = album.SetLabel(still, still_label)
+            return _ok(result, f"Label set to '{still_label}' on still {still_index}.",
+                       "Failed to set label.")
+        if action == "delete":
+            result = album.DeleteStills([still])
+            return _ok(result, f"Deleted still {still_index}.", "Failed to delete still.")
+        return f"Unknown action '{action}'. Use 'list', 'set_label', or 'delete'."
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ── Entry point ──
