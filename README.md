@@ -6,7 +6,7 @@ Connect **DaVinci Resolve Studio** to **Claude AI** through the [Model Context P
 
 > **Note:** This is a third-party integration and is not created by or affiliated with Blackmagic Design or Anthropic.
 >
-> ⚠️ **Use at your own risk.** This project is intended for testing and experimentation. **Do not use in production.** AI-assisted tools can modify or delete your project data — always work on backups.
+> ⚠️ **Use with caution.** AI-assisted tools can modify or delete project data — always work on backups and keep versioned copies of important projects. This toolset is used on real productions daily, but review every automated change before relying on it.
 
 > **Platform support:** Tested only on **macOS** (Apple Silicon). The Blackmagic scripting API is cross-platform, so the core Resolve-control tools may work on Windows and Linux as well, but this is unverified. Local transcription tools and the `screenshot` tool are **macOS-only** (they rely on `mlx-whisper` and macOS-specific screen-capture APIs).
 
