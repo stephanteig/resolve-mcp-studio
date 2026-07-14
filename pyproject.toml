@@ -12,6 +12,7 @@ dependencies = [
     # this isn't installed.
     "mlx-whisper>=0.4.3",
     "numpy>=2.2.6",
+    "Pillow>=10.0.0",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
 ]
 

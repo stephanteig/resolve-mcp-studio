@@ -95,6 +95,7 @@ Connect **DaVinci Resolve Studio** to **Claude AI** through the [Model Context P
 - **Project templates** — create projects with predefined structure (resolution, fps, bins, timelines) from JSON configs, or from imported `.drp` files
 - **Media Pool ↔ Finder sync** — mirror a Finder folder tree as bins and import each folder's media; idempotent re-runs pick up new files without duplicates
 - **Auto clip color** — categorize and color-code clips in the Media Pool or timeline by filename/metadata (drone, talking head, B-roll, music, graphics)
+- **Audio Visualizer image generator** — export the current timeline's audio and convert it to a multi-band waveform image ready for the [sh4rk Audio Visualiser](https://sh4rkk.com/shop) Fusion plugin; result is auto-imported into a Media Pool bin
 - **Browser panel** — compact dark-themed panel (status, marker editor, transcription) served by a local HTTP bridge
 
 ---
@@ -138,6 +139,7 @@ No addon to install inside Resolve. No socket server. The MCP server speaks stdi
 - **DaVinci Resolve Studio** 18.0+ (free version has limited scripting support)
 - **Python** 3.10+
 - **uv** package manager
+- **ffmpeg** (required for Audio Visualizer and local transcription features)
 
 Install uv:
 
@@ -150,6 +152,20 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 
 # Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Install ffmpeg:
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Windows (via winget)
+winget install ffmpeg
+
+# Linux
+sudo apt install ffmpeg   # Debian/Ubuntu
+sudo dnf install ffmpeg   # Fedora
 ```
 
 ---
@@ -452,6 +468,7 @@ All tools in this section require **DaVinci Resolve Studio** with the DaVinci Ne
 |------|---------|-------------|
 | `get_voice_isolation_state(track_index)` | `string` (JSON) | Returns the Voice Isolation state (enabled, amount) for an audio track. Requires Resolve Studio. |
 | `set_voice_isolation_state(track_index, enabled, amount)` | `string` | Enables or disables Voice Isolation on an audio track. Requires Resolve Studio. |
+| `generate_audio_visualizer_image(preset, target_width, bin_name)` | `string` (JSON) | Exports the current timeline's audio, converts it to a multi-band waveform PNG using the sh4rk Audio Visualiser format, and imports the result into a Media Pool subfolder. Requires `ffmpeg`. |
 
 #### `set_voice_isolation_state`
 
@@ -460,6 +477,39 @@ All tools in this section require **DaVinci Resolve Studio** with the DaVinci Ne
 | `track_index` | `int` | required | 1-based audio track number. |
 | `enabled` | `bool` | required | `True` to enable, `False` to disable. |
 | `amount` | `int` | `100` | Isolation strength: 0–100. |
+
+#### `generate_audio_visualizer_image`
+
+Renders the timeline audio via Resolve's built-in "Audio Only" render preset, processes it through a multi-band waveform pipeline (FFmpeg bandpass filters + NumPy + Pillow), and imports the resulting PNG into a named Media Pool bin. The PNG format is compatible with the [sh4rk Audio Visualiser](https://sh4rkk.com/shop) Fusion plugin — each row is one frequency band.
+
+> **Note:** Due to a known issue with the FastMCP tool wrapper in the current server version, this tool must be called via `execute_resolve_code` rather than directly. See [workaround](#audio-visualizer-workaround) below.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `preset` | `string` | `"3band"` | Frequency band preset. One of: `"1band"` (full spectrum), `"3band"` (Low/Mid/High in RGB), `"10band"`, `"25band"`, `"100band"` (maximum resolution, slow). |
+| `target_width` | `int` | `0` | Output image width in pixels. `0` = auto (1 pixel per frame, capped at 32 000 px). |
+| `bin_name` | `string` | `"Audio Visualizer"` | Name of the Media Pool subfolder to import the result into. Created if it doesn't exist. |
+
+**Example output:** a 854 × 10 px PNG for a 25 fps / 854-frame timeline with the `10band` preset — 10 rows, one per frequency band.
+
+##### Audio Visualizer workaround
+
+Until the FastMCP decorator issue is resolved, call the tool via `execute_resolve_code`:
+
+```python
+import sys, importlib
+sys.path.insert(0, '/absolute/path/to/resolve-mcp-studio/src')
+import resolve_claude_mcp.server as srv
+importlib.reload(srv)
+result = srv.generate_audio_visualizer_image(
+    preset="10band",
+    target_width=0,
+    bin_name="Audio Visualizer",
+)
+print(result)
+```
+
+Replace `/absolute/path/to/resolve-mcp-studio` with the actual path to your clone.
 
 ---
 
@@ -1134,6 +1184,13 @@ No external dependencies — fully self-contained vanilla JS and CSS.
 ### Render settings changed after transcription
 - `transcribe_timeline_audio` temporarily modifies render settings to export audio. Settings are restored after the job completes, but if the tool errors out mid-run, settings may be left in the audio-export state. Restore manually in the Deliver page.
 
+### `generate_audio_visualizer_image` returns "NoneType object is not callable"
+- This is a known issue with the FastMCP tool wrapper. The tool code itself works correctly — use the `execute_resolve_code` workaround documented in the [Audio section](#audio-visualizer-workaround).
+
+### Audio Visualizer produces no output / ffmpeg not found
+- Confirm ffmpeg is installed and on your PATH: `ffmpeg -version`
+- On macOS: `brew install ffmpeg`
+
 ---
 
 ## Disclaimer
@@ -1149,6 +1206,12 @@ No external dependencies — fully self-contained vanilla JS and CSS.
 
 ---
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
+
+---
+
 ## Credits
 
 - Fork of [barckley75/resolve-claude-mcp](https://github.com/barckley75/resolve-claude-mcp)
@@ -1156,3 +1219,4 @@ No external dependencies — fully self-contained vanilla JS and CSS.
 - Subtitle reference: [Auto-Subs by Tom Moroney](https://tom-moroney.com/auto-subs/)
 - Inspired by [BlenderMCP](https://github.com/ahujasid/blender-mcp) by Siddharth Ahuja
 - Built with the [Model Context Protocol](https://modelcontextprotocol.io) by Anthropic
+- Audio Visualizer image format by [sh4rk](https://sh4rkk.com/shop)

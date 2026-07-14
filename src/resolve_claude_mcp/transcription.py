@@ -5,6 +5,7 @@ Long files are split into chunks with ffmpeg so each transcription call
 completes well within any MCP timeout.
 """
 
+import gc
 import logging
 import os
 import shutil
@@ -122,17 +123,30 @@ def transcribe(
     if language:
         decode_options["language"] = language
 
+    def _free_mlx_cache():
+        """Release the MLX Metal GPU cache after transcription."""
+        try:
+            import mlx.core as mx
+            mx.metal.clear_cache()
+        except Exception:
+            pass
+        gc.collect()
+
     # Short file → transcribe directly
     if duration <= chunk_seconds:
         logger.info("Transcribing '%s' (%.0fs) with %s", audio_path, duration, repo)
-        return mlx_whisper.transcribe(
-            audio_path,
-            path_or_hf_repo=repo,
-            word_timestamps=word_timestamps,
-            initial_prompt=initial_prompt,
-            verbose=False,
-            **decode_options,
-        )
+        try:
+            return mlx_whisper.transcribe(
+                audio_path,
+                path_or_hf_repo=repo,
+                word_timestamps=word_timestamps,
+                initial_prompt=initial_prompt,
+                verbose=False,
+                **decode_options,
+            )
+        finally:
+            _free_mlx_cache()
+            logger.info("MLX Metal cache cleared after transcription")
 
     # Long file → chunk, transcribe each, stitch
     logger.info(
@@ -187,6 +201,8 @@ def transcribe(
         }
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        _free_mlx_cache()
+        logger.info("MLX Metal cache cleared after chunked transcription")
 
 
 # ── SRT helpers ────────────────────────────────────────────────────

@@ -5772,6 +5772,352 @@ def add_timeline_mattes(matte_paths: List[str]) -> str:
         return f"Error: {e}"
 
 
+# ── Audio Visualizer Image Generator ──
+
+def _find_or_create_subfolder(media_pool, parent_folder, name: str):
+    """Return an existing subfolder by name, or create it."""
+    for sub in (parent_folder.GetSubFolderList() or []):
+        if sub.GetName() == name:
+            return sub
+    return media_pool.AddSubFolder(parent_folder, name)
+
+
+def _av_find_ffmpeg() -> str | None:
+    """Locate ffmpeg on PATH."""
+    import shutil as _shutil
+    return _shutil.which("ffmpeg")
+
+
+def _av_process_waveform_image(input_path: str, output_path: str, target_width: int) -> bool:
+    """Collapse a waveform PNG to a 1-pixel-tall strip at target_width."""
+    import numpy as _np
+    from PIL import Image as _Image
+    try:
+        with _Image.open(input_path) as img:
+            img = img.convert("L")
+            arr = _np.array(img)
+            row_sums = _np.sum(arr, axis=1)
+            non_empty = _np.where(row_sums > arr.shape[1] * 5)[0]
+            if len(non_empty) == 0:
+                _Image.new("L", (target_width, 1), 0).save(output_path)
+                return True
+            waveform = arr[non_empty[0]: non_empty[-1] + 1, :]
+            if waveform.max() > waveform.min():
+                norm = (
+                    (waveform - waveform.min()) * 255.0 / (waveform.max() - waveform.min())
+                ).astype(_np.uint8)
+            else:
+                norm = waveform
+            _Image.fromarray(norm).resize((target_width, 1), _Image.Resampling.BILINEAR).save(output_path)
+            return True
+    except Exception as e:
+        logger.error(f"_av_process_waveform_image: {e}")
+        return False
+
+
+def _av_generate_100band_filters():
+    import numpy as _np
+    freqs = _np.geomspace(20, 20000, 100)
+    filters = []
+    for i in range(100):
+        f_int = max(1, int(round(freqs[i])))
+        bw = freqs[1] - freqs[0] if i == 0 else (freqs[99] - freqs[98] if i == 99 else (freqs[i + 1] - freqs[i - 1]) / 2.0)
+        bw_int = max(1, int(round(bw)))
+        filters.append(f"bandpass=f={f_int}:w={bw_int}")
+    return filters
+
+
+_AV_PRESET_CONFIGS = {
+    "1band": {
+        "bands": 1,
+        "filters": [],
+        "colors": ["white"],
+        "scale": "sqrt",
+        "suffix": "1b",
+    },
+    "3band": {
+        "bands": 3,
+        "filters": ["lowpass=f=250", "highpass=f=250,lowpass=f=4000", "highpass=f=4000"],
+        "colors": ["red", "green", "blue"],
+        "scale": "sqrt",
+        "suffix": "3b",
+    },
+    "10band": {
+        "bands": 10,
+        "filters": [
+            "bandpass=f=20:w=20", "bandpass=f=50:w=30", "bandpass=f=120:w=50",
+            "bandpass=f=300:w=80", "bandpass=f=700:w=150", "bandpass=f=1700:w=300",
+            "bandpass=f=4000:w=600", "bandpass=f=9000:w=1200", "bandpass=f=15000:w=2000",
+            "bandpass=f=20000:w=3000",
+        ],
+        "colors": ["white"] * 10,
+        "scale": "sqrt",
+        "suffix": "10b",
+    },
+    "25band": {
+        "bands": 25,
+        "filters": [
+            "bandpass=f=20:w=20", "bandpass=f=32:w=22", "bandpass=f=50:w=28",
+            "bandpass=f=80:w=35", "bandpass=f=120:w=45", "bandpass=f=180:w=55",
+            "bandpass=f=270:w=70", "bandpass=f=400:w=85", "bandpass=f=600:w=105",
+            "bandpass=f=900:w=130", "bandpass=f=1300:w=160", "bandpass=f=2000:w=200",
+            "bandpass=f=3000:w=250", "bandpass=f=4500:w=300", "bandpass=f=6800:w=370",
+            "bandpass=f=10000:w=450", "bandpass=f=13000:w=530", "bandpass=f=16000:w=620",
+            "bandpass=f=18000:w=710", "bandpass=f=19000:w=800", "bandpass=f=19500:w=900",
+            "bandpass=f=19800:w=1000", "bandpass=f=19900:w=1100", "bandpass=f=19950:w=1200",
+            "bandpass=f=20000:w=1300",
+        ],
+        "colors": ["white"] * 25,
+        "scale": "sqrt",
+        "suffix": "25b",
+    },
+    "100band": {
+        "bands": 100,
+        "filters": None,  # lazily computed
+        "colors": ["white"] * 100,
+        "scale": "sqrt",
+        "gamma": 0.75,
+        "suffix": "100b",
+    },
+}
+
+
+def _av_render_visualizer(audio_path: str, output_dir: str, preset: str, target_width: int) -> list[str]:
+    """Run the Visualizer pipeline on audio_path, return list of output PNG paths."""
+    import shutil as _shutil
+    import random as _random
+    import numpy as _np
+    from PIL import Image as _Image
+
+    ffmpeg = _av_find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found on PATH. Install ffmpeg to use this feature.")
+
+    config = dict(_AV_PRESET_CONFIGS[preset])
+    if config["filters"] is None:
+        config["filters"] = _av_generate_100band_filters()
+
+    gamma = config.get("gamma")
+    scale = config.get("scale", "sqrt")
+    n_bands = config["bands"]
+    safe_name = os.path.splitext(os.path.basename(audio_path))[0]
+    safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in safe_name)
+
+    def wavespic_filter(w, h, col):
+        return f"showwavespic=s={w}x{h}:colors={col}:scale={scale}"
+
+    def apply_gamma(pil_img, g):
+        if g is None or g == 1.0:
+            return pil_img
+        arr = _np.array(pil_img.convert("L"), dtype=_np.float32) / 255.0
+        arr = _np.power(arr, 1.0 / g)
+        arr = (arr * 255.0).clip(0, 255).astype(_np.uint8)
+        result = _Image.fromarray(arr, "L")
+        if pil_img.mode == "RGB":
+            result = result.convert("RGB")
+        return result
+
+    tmp = os.path.join(output_dir, f"_av_tmp_{_random.randint(1000, 9999)}")
+    os.makedirs(tmp, exist_ok=True)
+    out_paths = []
+
+    try:
+        if n_bands == 1:
+            w_png = os.path.join(tmp, f"{safe_name}_waveform.png")
+            r_png = os.path.join(tmp, f"{safe_name}_resized.png")
+            out_png = os.path.join(output_dir, f"{safe_name}_Waveform_{config['suffix']}.png")
+            subprocess.run(
+                [ffmpeg, "-i", audio_path, "-filter_complex",
+                 f"aformat=channel_layouts=mono,{wavespic_filter(target_width, 240, 'white')}",
+                 "-frames:v", "1", "-y", w_png],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+            )
+            if _av_process_waveform_image(w_png, r_png, target_width):
+                with _Image.open(r_png) as img:
+                    final = apply_gamma(img, gamma).convert("RGB").resize(
+                        (target_width, 10), _Image.Resampling.NEAREST
+                    )
+                    final.save(out_png, "PNG")
+                    out_paths.append(out_png)
+            return out_paths
+
+        # Multi-band: split audio into per-band WAVs
+        fc = f"aformat=channel_layouts=mono,asplit={n_bands}"
+        fc += "".join(f"[in{i}]" for i in range(1, n_bands + 1)) + ";"
+        fc += ";".join(
+            f"[in{i}]{config['filters'][i - 1]}[out{i}]" for i in range(1, n_bands + 1)
+        )
+        cmd = [ffmpeg, "-i", audio_path, "-filter_complex", fc]
+        for i in range(1, n_bands + 1):
+            cmd += ["-map", f"[out{i}]", os.path.join(tmp, f"{safe_name}_band{i}.wav")]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+        band_imgs = []
+        for band in range(1, n_bands + 1):
+            bwav = os.path.join(tmp, f"{safe_name}_band{band}.wav")
+            bpng = os.path.join(tmp, f"{safe_name}_waveform{band}.png")
+            rpng = os.path.join(tmp, f"{safe_name}_resized{band}.png")
+            col = config["colors"][band - 1]
+            try:
+                subprocess.run(
+                    [ffmpeg, "-i", bwav, "-filter_complex",
+                     wavespic_filter(target_width, 200, col),
+                     "-frames:v", "1", "-y", bpng],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+                )
+                band_imgs.append(rpng if _av_process_waveform_image(bpng, rpng, target_width) else None)
+            except subprocess.CalledProcessError:
+                band_imgs.append(None)
+
+        if any(p for p in band_imgs if p):
+            out_png = os.path.join(output_dir, f"{safe_name}_Waveform_{config['suffix']}.png")
+            if n_bands == 3:
+                final = _Image.new("RGB", (target_width, n_bands))
+                for y, p in enumerate(band_imgs):
+                    if p and os.path.exists(p):
+                        with _Image.open(p) as bi:
+                            final.paste(bi.convert("RGB"), (0, y))
+                final = apply_gamma(final, gamma).resize((target_width, 10), _Image.Resampling.NEAREST)
+            else:
+                final = _Image.new("L", (target_width, n_bands))
+                for y, p in enumerate(band_imgs):
+                    if p and os.path.exists(p):
+                        with _Image.open(p) as bi:
+                            final.paste(bi.convert("L"), (0, y))
+                final = apply_gamma(final, gamma)
+            final.save(out_png, "PNG")
+            out_paths.append(out_png)
+
+        return out_paths
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+@mcp.tool()
+def generate_audio_visualizer_image(
+    preset: str = "3band",
+    target_width: int = 0,
+    bin_name: str = "Audio Visualizer",
+) -> str:
+    """
+    Export the current timeline's audio, convert it to a waveform visualizer image
+    using the sh4rk Audio Visualiser format, and import the result into a subfolder
+    of the current project's Media Pool.
+
+    The output PNG has one row per frequency band — ready to drop into the
+    sh4rk Audio Visualiser plugin in DaVinci Resolve.
+
+    Parameters:
+    - preset: Frequency band preset. One of:
+        "1band"   – Full spectrum (single row)
+        "3band"   – Low / Mid / High in RGB channels (default)
+        "10band"  – 10 logarithmic bands
+        "25band"  – 25 bands (high resolution)
+        "100band" – 100 bands (maximum resolution, slow)
+    - target_width: Output image width in pixels. 0 = auto (1 pixel per frame based
+        on timeline FPS and duration, capped at 32000 px).
+    - bin_name: Name of the Media Pool subfolder to import into (default: "Audio Visualizer").
+    """
+    try:
+        conn = _conn()
+        timeline = _require_timeline(conn)
+        project = conn.get_project()
+        mp = conn.get_media_pool()
+
+        if preset not in _AV_PRESET_CONFIGS:
+            return (f"Unknown preset '{preset}'. "
+                    f"Choose from: {', '.join(_AV_PRESET_CONFIGS.keys())}")
+
+        # Resolve target width from timeline if not specified
+        if target_width <= 0:
+            tl_info = timeline_to_dict(timeline)
+            fps = float(tl_info.get("timelineFrameRate", tl_info.get("fps", 24.0)))
+            duration_frames = int(tl_info.get("end_frame", 0)) - int(tl_info.get("start_frame", 0))
+            target_width = min(32000, max(1, duration_frames))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Step 1 – render timeline audio to WAV via Resolve's render API
+            tl_name = timeline.GetName() or "timeline"
+            safe_tl = "".join(c if c.isalnum() or c in "_-" else "_" for c in tl_name)
+            audio_path = os.path.join(tmp_dir, f"{safe_tl}_audio.wav")
+
+            project.LoadRenderPreset("Audio Only")
+            project.SetRenderSettings({
+                "TargetDir": tmp_dir,
+                "CustomName": f"{safe_tl}_audio",
+                "SelectAllFrames": True,
+            })
+            job_id = project.AddRenderJob()
+            if not job_id:
+                return "Failed to add render job for audio export."
+
+            project.StartRendering([job_id])
+
+            # Poll until done (max 5 minutes)
+            import time as _time
+            deadline = _time.time() + 300
+            while _time.time() < deadline:
+                status = project.GetRenderJobStatus(job_id) or {}
+                job_status = status.get("JobStatus", "")
+                if job_status == "Complete":
+                    break
+                if job_status in ("Failed", "Cancelled"):
+                    project.DeleteRenderJob(job_id)
+                    return f"Audio render {job_status.lower()}."
+                _time.sleep(1)
+            else:
+                project.StopRendering()
+                return "Audio render timed out after 5 minutes."
+
+            project.DeleteRenderJob(job_id)
+
+            if not os.path.exists(audio_path):
+                # Resolve may add a suffix — search for any WAV in tmp_dir
+                wavs = [f for f in os.listdir(tmp_dir) if f.lower().endswith(".wav")]
+                if not wavs:
+                    return "Audio export succeeded but no WAV file was found in the output directory."
+                audio_path = os.path.join(tmp_dir, wavs[0])
+
+            # Step 2 – generate visualizer PNG(s)
+            png_paths = _av_render_visualizer(audio_path, tmp_dir, preset, target_width)
+            if not png_paths:
+                return "Visualizer processing produced no output images. Check ffmpeg is installed."
+
+            # Step 3 – copy PNGs to a stable location (temp dir will be deleted)
+            # We need a persistent folder that survives the context manager
+            import shutil as _shutil
+            persist_dir = tempfile.mkdtemp(prefix="av_visualizer_")
+            final_paths = []
+            for p in png_paths:
+                dest = os.path.join(persist_dir, os.path.basename(p))
+                _shutil.copy2(p, dest)
+                final_paths.append(dest)
+
+        # Step 4 – import into Media Pool subfolder
+        root_folder = mp.GetRootFolder()
+        target_folder = _find_or_create_subfolder(mp, root_folder, bin_name)
+        if target_folder is None:
+            return f"Failed to create or find Media Pool bin '{bin_name}'."
+
+        mp.SetCurrentFolder(target_folder)
+        imported = mp.ImportMedia(final_paths)
+
+        imported_names = [item.GetName() for item in (imported or []) if item]
+
+        return json.dumps({
+            "status": "ok",
+            "preset": preset,
+            "width_px": target_width,
+            "bin": bin_name,
+            "images_imported": len(imported_names),
+            "files": imported_names,
+        }, indent=2)
+
+    except Exception as e:
+        import traceback as _tb
+        return f"Error: {e}\n{_tb.format_exc()}"
+
+
 # ── Entry point ──
 
 def main():
